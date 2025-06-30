@@ -1424,6 +1424,11 @@
   dependencies:
     undici-types "~7.8.0"
 
+"@types/react-native-base64@^0.2.2":
+  version "0.2.2"
+  resolved "https://registry.yarnpkg.com/@types/react-native-base64/-/react-native-base64-0.2.2.tgz#d4e1d537e6d547d23d96a1e64627acc13587ae6b"
+  integrity sha512-obr+/L9Jaxdr+xCVS/IQcYgreg5xtnui4Wqw/G1acBUtW2CnqVJj6lK6F/5F3+5d2oZEo5xDDLqy8GVn2HbEmw==
+
 "@types/react@~19.0.10":
   version "19.0.14"
   resolved "https://registry.yarnpkg.com/@types/react/-/react-19.0.14.tgz#f2f62035290afd755095cb6644e10b599db72f4e"
@@ -2342,6 +2347,14 @@ expo-status-bar@~2.2.3:
   dependencies:
     react-native-edge-to-edge "1.6.0"
     react-native-is-edge-to-edge "^1.1.6"
+
+expo-system-ui@~5.0.9:
+  version "5.0.9"
+  resolved "https://registry.yarnpkg.com/expo-system-ui/-/expo-system-ui-5.0.9.tgz#38b5ef7e90d7d88123dec5b765c0992dbd7a192f"
+  integrity sha512-behQ4uP384++U9GjgXmyEno1Z8raN1/tZv7ZJhYkQkRj1g2xXvNltXN/PDRcOm/wCNqStVhDpYo2OOQm5E5/lQ==
+  dependencies:
+    "@react-native/normalize-colors" "0.79.4"
+    debug "^4.3.2"
 
 expo-updates-interface@~1.1.0:
   version "1.1.0"
@@ -3673,6 +3686,11 @@ react-is@^18.0.0:
   version "18.3.1"
   resolved "https://registry.yarnpkg.com/react-is/-/react-is-18.3.1.tgz#e83557dc12eae63a99e003a46388b1dcbb44db7e"
   integrity sha512-/LLMVyas0ljjAtoYiPqYiL8VWXzUUdThrmU5+n20DZv+a+ClRoevUzw5JxU+Ieh5/c87ytoTBV9G1FiKfNJdmg==
+
+react-native-base64@^0.2.1:
+  version "0.2.1"
+  resolved "https://registry.yarnpkg.com/react-native-base64/-/react-native-base64-0.2.1.tgz#3d0e73a649c4c0129f7b7695d3912456aebae847"
+  integrity sha512-eHgt/MA8y5ZF0aHfZ1aTPcIkDWxza9AaEk4GcpIX+ZYfZ04RcaNahO+527KR7J44/mD3efYfM23O2C1N44ByWA==
 
 react-native-ble-plx@^3.5.0:
   version "3.5.0"
