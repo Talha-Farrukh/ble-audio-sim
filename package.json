@@ -6,11 +6,16 @@
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:debug": "jest --detectOpenHandles --verbose"
   },
   "dependencies": {
     "@types/react-native-base64": "^0.2.2",
     "expo": "~53.0.12",
+    "expo-build-properties": "~0.14.8",
     "expo-dev-client": "~5.2.1",
     "expo-file-system": "~18.1.10",
     "expo-status-bar": "~2.2.3",
@@ -22,8 +27,43 @@
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
+    "@testing-library/jest-native": "^5.4.3",
+    "@testing-library/react-native": "^12.7.2",
+    "@types/jest": "^29.5.12",
     "@types/react": "~19.0.10",
+    "jest": "^29.7.0",
+    "jest-expo": "~53.0.0",
+    "react-test-renderer": "19.0.0",
     "typescript": "~5.8.3"
+  },
+  "jest": {
+    "preset": "jest-expo",
+    "setupFilesAfterEnv": [
+      "<rootDir>/jest-setup.js"
+    ],
+    "testMatch": [
+      "**/__tests__/**/*.(test|spec).(ts|tsx|js)"
+    ],
+    "testPathIgnorePatterns": [
+      "<rootDir>/node_modules/",
+      "<rootDir>/__tests__/utils/"
+    ],
+    "transformIgnorePatterns": [
+      "node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules|sentry-expo|native-base|react-native-svg)"
+    ],
+    "collectCoverageFrom": [
+      "**/*.{ts,tsx,js,jsx}",
+      "!**/*.d.ts",
+      "!**/node_modules/**",
+      "!**/__tests__/**",
+      "!**/coverage/**",
+      "!**/babel.config.js",
+      "!**/expo-env.d.ts",
+      "!**/.expo/**"
+    ],
+    "moduleNameMapper": {
+      "^@/(.*)$": "<rootDir>/$1"
+    }
   },
   "private": true
 }

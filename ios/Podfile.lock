@@ -270,6 +270,8 @@ PODS:
     - Yoga
   - ExpoAsset (11.1.5):
     - ExpoModulesCore
+  - ExpoDosmonoBle (1.0.0):
+    - ExpoModulesCore
   - ExpoFileSystem (18.1.10):
     - ExpoModulesCore
   - ExpoFont (13.3.1):
@@ -301,6 +303,8 @@ PODS:
     - ReactCommon/turbomodule/bridging
     - ReactCommon/turbomodule/core
     - Yoga
+  - ExpoSystemUI (5.0.9):
+    - ExpoModulesCore
   - EXUpdatesInterface (1.1.0):
     - ExpoModulesCore
   - fast_float (6.1.4)
@@ -1997,10 +2001,12 @@ DEPENDENCIES:
   - expo-dev-menu (from `../node_modules/expo-dev-menu`)
   - expo-dev-menu-interface (from `../node_modules/expo-dev-menu-interface/ios`)
   - ExpoAsset (from `../node_modules/expo-asset/ios`)
+  - ExpoDosmonoBle (from `../modules/expo-dosmono-ble/ios`)
   - ExpoFileSystem (from `../node_modules/expo-file-system/ios`)
   - ExpoFont (from `../node_modules/expo-font/ios`)
   - ExpoKeepAwake (from `../node_modules/expo-keep-awake/ios`)
   - ExpoModulesCore (from `../node_modules/expo-modules-core`)
+  - ExpoSystemUI (from `../node_modules/expo-system-ui/ios`)
   - EXUpdatesInterface (from `../node_modules/expo-updates-interface/ios`)
   - fast_float (from `../node_modules/react-native/third-party-podspecs/fast_float.podspec`)
   - FBLazyVector (from `../node_modules/react-native/Libraries/FBLazyVector`)
@@ -2102,6 +2108,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/expo-dev-menu-interface/ios"
   ExpoAsset:
     :path: "../node_modules/expo-asset/ios"
+  ExpoDosmonoBle:
+    :path: "../modules/expo-dosmono-ble/ios"
   ExpoFileSystem:
     :path: "../node_modules/expo-file-system/ios"
   ExpoFont:
@@ -2110,6 +2118,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/expo-keep-awake/ios"
   ExpoModulesCore:
     :path: "../node_modules/expo-modules-core"
+  ExpoSystemUI:
+    :path: "../node_modules/expo-system-ui/ios"
   EXUpdatesInterface:
     :path: "../node_modules/expo-updates-interface/ios"
   fast_float:
@@ -2264,10 +2274,12 @@ SPEC CHECKSUMS:
   expo-dev-menu: c8b438f2db8e6a6ca6714a01d9425b8a9690fa06
   expo-dev-menu-interface: 609c35ae8b97479cdd4c9e23c8cf6adc44beea0e
   ExpoAsset: 3bc9adb7dbbf27ae82c18ca97eb988a3ae7e73b1
+  ExpoDosmonoBle: 6d3b465f22ad55e0332e9ad59fbb1b9ab086554c
   ExpoFileSystem: c36eb8155eb2381c83dda7dc210e3eec332368b6
   ExpoFont: abbb91a911eb961652c2b0a22eef801860425ed6
   ExpoKeepAwake: bf0811570c8da182bfb879169437d4de298376e7
   ExpoModulesCore: d431ffe83c8673d02cb38425594a5f5480fd3061
+  ExpoSystemUI: 8f2979df9afed5bfaa7d69465a07a9f602c1f3a7
   EXUpdatesInterface: 7ff005b7af94ee63fa452ea7bb95d7a8ff40277a
   fast_float: 06eeec4fe712a76acc9376682e4808b05ce978b6
   FBLazyVector: 15c28682af535aa55b9b31e64deff54b7ed7d453
@@ -2341,6 +2353,6 @@ SPEC CHECKSUMS:
   SocketRocket: d4aabe649be1e368d1318fdf28a022d714d65748
   Yoga: a6cb833e04fb8c59a012b49fb1d040fcb0cbb633
 
-PODFILE CHECKSUM: 40cc74b5173ddcd22b9ee0774c2150d112e4aee8
+PODFILE CHECKSUM: 304ecf97f0429c5faab5f0fa1d2c45f7256e7493
 
 COCOAPODS: 1.16.2

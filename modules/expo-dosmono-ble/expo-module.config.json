@@ -1,0 +1,18 @@
+{
+  "platforms": ["ios", "android", "web"],
+  "ios": {
+    "modules": ["ExpoDosmonoBleModule"]
+  },
+  "android": {
+    "gradleAarProjects": [
+      {
+        "name": "dosmono-sdk",
+        "aarFilePath": "android/libs/sdk.aar"
+      }
+    ],
+    "modules": ["expo.modules.dosmonoble.ExpoDosmonoBleModule"]
+  },
+  "web": {
+    "modules": ["ExpoDosmonoBleModule"]
+  }
+}

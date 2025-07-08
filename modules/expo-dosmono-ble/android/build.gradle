@@ -1,0 +1,90 @@
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+
+group = 'expo.modules.dosmonoble'
+version = '0.7.2'
+
+def expoModulesCorePlugin = new File(project(":expo-modules-core").projectDir.absolutePath, "ExpoModulesCorePlugin.gradle")
+apply from: expoModulesCorePlugin
+applyKotlinExpoModulesCorePlugin()
+useCoreDependencies()
+// Commented out publishing for local module - not needed and causes component issues
+// useExpoPublishing()
+
+// If you want to use the managed Android SDK versions from expo-modules-core, set this to true.
+// The Android SDK versions will be bumped from time to time in SDK releases and may introduce breaking changes in your module code.
+// Most of the time, you may like to manage the Android SDK versions yourself.
+def useManagedAndroidSdkVersions = false
+if (useManagedAndroidSdkVersions) {
+  useDefaultAndroidSdkVersions()
+} else {
+  buildscript {
+    // Simple helper that allows the root project to override versions declared by this library.
+    ext.safeExtGet = { prop, fallback ->
+      rootProject.ext.has(prop) ? rootProject.ext.get(prop) : fallback
+    }
+  }
+  project.android {
+    compileSdkVersion safeExtGet("compileSdkVersion", 34)
+    defaultConfig {
+      minSdkVersion Math.max(safeExtGet("minSdkVersion", 21), 24) // Updated to match app minSdk requirement
+      targetSdkVersion safeExtGet("targetSdkVersion", 34)
+    }
+  }
+}
+
+android {
+  namespace = "expo.modules.dosmonoble"
+  defaultConfig {
+    versionCode = 1
+    versionName = "0.7.2"
+    multiDexEnabled = true
+  }
+  lintOptions {
+    abortOnError = false
+  }
+  compileOptions {
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+  }
+  packagingOptions {
+    exclude 'META-INF/LICENSE'
+    exclude 'META-INF/io.netty.versions.properties'
+    exclude 'META-INF/INDEX.LIST'
+    exclude 'META-INF/DEPENDENCIES'
+    exclude 'META-INF/NOTICE'
+    exclude 'META-INF/LICENSE.txt'
+    exclude 'META-INF/NOTICE.txt'
+    exclude 'project.properties'
+    exclude 'META-INF/speech_release.kotlin_module'
+    exclude 'META-INF/translate_release.kotlin_module'
+  }
+}
+
+dependencies {
+  // Dosmono SDK using AAR file from libs directory - direct file reference
+  implementation files('libs/sdk.aar')
+  
+  // Required dependencies for Dosmono SDK
+  implementation 'androidx.core:core:1.7.0'
+  implementation 'androidx.appcompat:appcompat:1.4.2'
+  implementation 'androidx.recyclerview:recyclerview:1.2.1'
+  implementation 'com.google.android.material:material:1.6.1'
+  implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+  
+  // Networking
+  implementation 'com.squareup.retrofit2:retrofit:2.9.0'
+  implementation 'com.squareup.retrofit2:converter-gson:2.9.0'
+  implementation 'com.squareup.retrofit2:adapter-rxjava2:2.9.0'
+  implementation 'com.squareup.okhttp3:logging-interceptor:4.9.3'
+  
+  // RxJava
+  implementation 'io.reactivex.rxjava2:rxandroid:2.1.1'
+  implementation 'io.reactivex.rxjava2:rxjava:2.2.21'
+  
+  // JSON parsing
+  implementation 'com.alibaba:fastjson:1.2.83'
+  
+  // Kotlin coroutines
+  implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.4'
+}

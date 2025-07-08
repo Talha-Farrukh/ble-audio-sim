@@ -15,9 +15,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "13B07F861A680F5B00A75B9A"
-               BuildableName = "bleaudiosim.app"
-               BlueprintName = "bleaudiosim"
-               ReferencedContainer = "container:bleaudiosim.xcodeproj">
+               BuildableName = "BLEAudioSim.app"
+               BlueprintName = "BLEAudioSim"
+               ReferencedContainer = "container:BLEAudioSim.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -33,9 +33,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "00E356ED1AD99517003FC87E"
-               BuildableName = "bleaudiosimTests.xctest"
-               BlueprintName = "bleaudiosimTests"
-               ReferencedContainer = "container:bleaudiosim.xcodeproj">
+               BuildableName = "BLEAudioSimTests.xctest"
+               BlueprintName = "BLEAudioSimTests"
+               ReferencedContainer = "container:BLEAudioSim.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -55,9 +55,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "13B07F861A680F5B00A75B9A"
-            BuildableName = "bleaudiosim.app"
-            BlueprintName = "bleaudiosim"
-            ReferencedContainer = "container:bleaudiosim.xcodeproj">
+            BuildableName = "BLEAudioSim.app"
+            BlueprintName = "BLEAudioSim"
+            ReferencedContainer = "container:BLEAudioSim.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -72,9 +72,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "13B07F861A680F5B00A75B9A"
-            BuildableName = "bleaudiosim.app"
-            BlueprintName = "bleaudiosim"
-            ReferencedContainer = "container:bleaudiosim.xcodeproj">
+            BuildableName = "BLEAudioSim.app"
+            BlueprintName = "BLEAudioSim"
+            ReferencedContainer = "container:BLEAudioSim.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

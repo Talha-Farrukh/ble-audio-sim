@@ -7,7 +7,7 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>$(DEVELOPMENT_LANGUAGE)</string>
     <key>CFBundleDisplayName</key>
-    <string>ble-audio-sim</string>
+    <string>BLE Audio Sim</string>
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>
     <key>CFBundleIdentifier</key>
@@ -51,12 +51,11 @@
       <true/>
     </dict>
     <key>NSBluetoothAlwaysUsageDescription</key>
-    <string>App needs BLE access to connect to recorder.</string>
-    <key>UIBackgroundModes</key>
-    <array>
-      <string>bluetooth-central</string>
-      <string>bluetooth-central</string>
-    </array>
+    <string>This app uses Bluetooth to connect to wearable devices for audio recording.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>This app needs location permission to scan for Bluetooth devices.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>This app needs microphone access for audio recording.</string>
     <key>UILaunchStoryboardName</key>
     <string>SplashScreen</string>
     <key>UIRequiredDeviceCapabilities</key>
