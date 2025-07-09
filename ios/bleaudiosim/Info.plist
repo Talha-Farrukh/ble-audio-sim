@@ -51,11 +51,17 @@
       <true/>
     </dict>
     <key>NSBluetoothAlwaysUsageDescription</key>
-    <string>App needs BLE access to connect to recorder.</string>
+    <string>This app needs Bluetooth access to connect to and control voice recording devices.</string>
+    <key>NSBluetoothPeripheralUsageDescription</key>
+    <string>This app needs Bluetooth access to connect to and control voice recording devices.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Location access is required for Bluetooth device scanning on iOS.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Allow $(PRODUCT_NAME) to access your microphone</string>
     <key>UIBackgroundModes</key>
     <array>
       <string>bluetooth-central</string>
-      <string>bluetooth-central</string>
+      <string>bluetooth-peripheral</string>
     </array>
     <key>UILaunchStoryboardName</key>
     <string>SplashScreen</string>

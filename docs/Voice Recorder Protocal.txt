@@ -1,0 +1,304 @@
+Voice Recorder Protocol Specification
+Modification History
+Version Release Date Content Description
+1.0.1 2021.12.02 Initial version
+1.0.2 2021.12.03 Updated version
+1. Version Description
+Version: 1.0.2
+The default MTU in the protocol is 20, but in practice it may be larger, such as 160.
+2. BLE Data Transmission - Real-time Recording
+Below are the service and characteristic values for audio binary stream reading (UUIDs can be
+customized):
+Service
+• Name: AudioStream
+• UUID: FFF3
+Characteristic
+• Name: AudioStream
+• Properties: NOTIFY
+• UUID: FFF5
+• Name: AudioStream
+• Properties: WRITE
+• UUID: FFF4
+Data Frame Structure
+Protocol Version Header Identifier Audio Stream ID Data Area
+Byte 1~2 Byte 3~8 Byte 9~12 Byte 13~...
+• Protocol Version: 2 bytes
+• Header Identifier: 6 bytes, fixed value 0x61696d742d30
+• Audio Stream ID: 4 bytes, Unix timestamp accurate to seconds, e.g., 1588921663
+• Data Length: 6 bytes
+• Tail Identifier: 6 bytes, fixed value 0x61696d742d31
+Tail Frame: Tail frame is only added in response, no need to add tail frame when sending
+Tail Identifier
+Byte 1~6
+3. BLE Data Transmission - Offline Files
+Below are the service and characteristic values for offline file binary stream reading (UUIDs can be
+customized):
+Service
+• Name: FileStream
+• UUID: FFFC
+Characteristic
+• Name: FileStream
+• Properties: NOTIFY
+• UUID: FFFE
+• Name: FileStream
+• Properties: WRITE
+• UUID: FFFD
+Data Frame Structure
+Protocol Version Header Identifier File ID Data Length Data Area
+Byte 1~2 Byte 3~8 Byte 9~12 Byte 13~17 Byte 18~...
+• Protocol Version: 2 bytes
+• Header Identifier: 6 bytes, fixed value 0x61696d742d30
+• File ID: 4 bytes, Unix timestamp accurate to seconds, e.g., 1588921663
+• Data Length: 6 bytes
+• Tail Identifier: 6 bytes, fixed value 0x61696d742d31
+Tail Identifier: Tail frame is only added in response, no need to add tail frame when sending
+Tail Identifier
+Byte 1~6
+4. BLE Data Transmission - Firmware Upgrade
+Below are the services for binary stream reading (UUIDs can be customized):
+Service
+• Name: OtaStream
+• UUID: FFF0
+Characteristic
+• Name: OtaStream
+• Properties: NOTIFY
+• UUID: FFF2
+• Name: OtaStream
+• Properties: WRITE
+• UUID: FFF1
+Data Frame Structure
+Protocol Version Header Identifier Data Length Checksum Data Area After First Frame
+Byte 1~2 Byte 3~8 Byte 9~12 Byte 13~14 Byte 14~20 Byte 21~...
+• Protocol Version: 2 bytes
+• Header Identifier: 6 bytes, fixed value 0x61696d742d30
+• Data Length: 4 bytes, maximum represents 3.99GB
+• Checksum: 2 bytes, CRC16 checksum
+5. BLE Control Commands
+Service
+• Name: Command
+• UUID: FFF9
+Characteristic
+• Name: Command
+• Properties: WRITE
+• UUID: FFFA
+• Name: Command
+• Properties: NOTIFY
+• UUID: FFFB
+Command Frame Structure
+Protocol Version Header Identifier Command Indicator Error Code Data Area
+Byte 1~2 Byte 3~8 Byte 9 Byte 10 Byte 11~...
+• Protocol Version: 2 bytes
+• Header Identifier: 6 bytes, fixed value 0x61696d742d30
+• Error Code: Corresponds to related commands
+o 0x00: Success
+o 0x12: Error
+• Tail Identifier: 6 bytes, fixed value 0x61696d742d31
+Tail identifier is only added in response, no need to add tail frame when sending
+Tail Identifier
+Byte 1~6
+Note: The following are data area contents for control commands
+6. Software to Device Commands
+6.1: Start Real-time Recording
+Send: | Protocol Version | Header Identifier | Command: 0x61 | 0x00 | sessionId[4] | save_ste |
+• sessionId: Audio identifier (filename), Unix timestamp accurate to seconds, e.g., 1588921663
+• save_ste: Save flag, whether to save current recording file. 0=save, 1=don't save
+Receive: | Protocol Version | Header Identifier | 0x61 | 0x00 | sessionId[4] | save_ste |
+6.2: End Real-time Recording
+Send: | Protocol Version | Header Identifier | Command: 0x62 |
+Receive: | Protocol Version | Header Identifier | Command: 0x62 | 0x00 | sessionId[4] |
+• sessionId: Audio identifier (filename), Unix timestamp accurate to seconds, e.g., 1588921663
+6.3: Get File List
+Send: | Protocol Version | Header Identifier | Command: 0x63 |
+Receive: | Protocol Version | Header Identifier | Command: 0x63 | 0x00 | JSON Area |
+JSON format:
+{
+"data": [
+{
+"name": "filename1", "size": 1024, "id": 1587985539, "sn": "aa213123141", "duration": 131418 // File name (string, can be omitted)
+// File size in hex: 0x31343436313637, unit: KB
+// File ID using timestamp
+// Serial number (string)
+// Recording duration in milliseconds
+},
+{
+"name": "filename2",
+"size": 2046,
+"id": 1587982655
+// ...
+}
+]
+}
+6.4: Sync File (by file ID)
+Send: | Protocol Version | Header Identifier | Command: 0x64 | id[4] | offset[6] |
+• id: File ID, e.g., current Unix timestamp accurate to seconds, 4 bytes
+• offset: Transmission offset, 6 bytes (default 0)
+Receive: | Protocol Version | Header Identifier | Command: 0x64 | 0x00 | Data Area |
+6.5: Sync File (by filename)
+Send: | Protocol Version | Header Identifier | Command: 0x72 | offset[6] | name[...] |
+• name: Filename, e.g., rec0001.wav, unlimited bytes
+• offset: Transmission offset, 6 bytes
+Receive: | Protocol Version | Header Identifier | Command: 0x72 | 0x00 |
+6.6: Stop Sync File (by file ID)
+Send: | Protocol Version | Header Identifier | Command: 0x65 | id[4] |
+• id: File ID, e.g., current Unix timestamp accurate to seconds, 4 bytes
+Receive: | Protocol Version | Header Identifier | Command: 0x65 | 0x00 |
+6.7: Stop Sync File (by filename)
+Send: | Protocol Version | Header Identifier | Command: 0x73 | name[...] |
+• name: Filename, e.g., rec0001.wav
+Receive: | Protocol Version | Header Identifier | Command: 0x73 | 0x00 |
+6.8: Delete File (by file ID)
+Send: | Protocol Version | Header Identifier | Command: 0x66 | id[4] |
+• id: File ID, e.g., current Unix timestamp accurate to seconds, 4 bytes
+Receive: | Protocol Version | Header Identifier | Command: 0x66 | 0x00 |
+6.9: Delete File (by filename)
+Send: | Protocol Version | Header Identifier | Command: 0x74 | name[...] |
+• name: Filename, e.g., rec0001.wav
+Receive: | Protocol Version | Header Identifier | Command: 0x74 | 0x00 |
+6.10: Get Remaining Capacity
+Send: | Protocol Version | Header Identifier | Command: 0x67 |
+Receive: | Protocol Version | Header Identifier | Command: 0x67 | 0x00 | free[4] | total[4] |
+• free: Remaining space, 4 bytes, unit: KB
+• total: Total space, 4 bytes, unit: KB
+6.11: Get Time and Timezone
+Send: | Protocol Version | Header Identifier | Command: 0x68 |
+Receive: | Protocol Version | Header Identifier | Command: 0x68 | 0x00 | timestamp[4] | timezone[1] |
+• timestamp: Current Unix timestamp accurate to seconds, 4 bytes
+• timezone: Timezone, 1 byte unsigned, 0~23 for 24 timezones, 0 represents -11, 23 represents
++12. Device can omit timezone field (default 0)
+6.12: Sync Time and Timezone
+Send: | Protocol Version | Header Identifier | Command: 0x69 | timestamp[4] | timezone[1] |
+Receive: | Protocol Version | Header Identifier | Command: 0x69 | 0x00 |
+• timestamp: Current Unix timestamp accurate to seconds, 4 bytes
+• timezone: Timezone, 1 byte unsigned, 0~23 for 24 timezones, 0 represents -11, 23 represents
++12 (default 0)
+6.13: Factory Reset
+Send: | Protocol Version | Header Identifier | Command: 0x6A |
+Receive: | Protocol Version | Header Identifier | Command: 0x6A | 0x00 |
+6.14: Get Firmware Version
+Send: | Protocol Version | Header Identifier | Command: 0x6B |
+Receive: | Protocol Version | Header Identifier | Command: 0x6B | 0x00 | versionCode[4] |
+• versionCode: 4 bytes, e.g., version 1.0
+6.15: Set USB Mode
+Send: | Protocol Version | Header Identifier | Command: 0x6C | usb_mode[1] |
+• usb_mode: 0=enable USB disk mode, 1 byte
+Receive: | Protocol Version | Header Identifier | Command: 0x6C | 0x00 |
+6.16: Get User Info
+Send: | Protocol Version | Header Identifier | Command: 0x6D |
+Receive: | Protocol Version | Header Identifier | Command: 0x6D | 0x00 | user_id[4] |
+• user_id: User ID, 4 bytes
+6.17: Get Battery Level
+Send: | Protocol Version | Header Identifier | Command: 0x6E |
+Receive: | Protocol Version | Header Identifier | Command: 0x6E | 0x00 | battery[1] | incharge[1] |
+• battery: 0~100, 1 byte
+• incharge: 0=not charging, 1=charging, 1 byte
+6.18: User Binding
+Send: | Protocol Version | Header Identifier | Command: 0x6F | user_id[4] |
+• user_id: String
+Receive: | Protocol Version | Header Identifier | Command: 0x6F | 0x00 |
+6.19: Unbind
+Send: | Protocol Version | Header Identifier | Command: 0x70 |
+Receive: | Protocol Version | Header Identifier | Command: 0x70 | 0x00 |
+6.20: Get Device Status
+Fields are dynamically adjusted based on device, no need to transmit if same as default value
+Send: | Protocol Version | Header Identifier | Command: 0x71 |
+Receive: | Protocol Version | Header Identifier | Command: 0x71 | 0x00 | JSON Data |
+JSON format:
+{
+"data": {
+"battery": 100, // 0-100
+"bound": 0, // 0=unbound, 1=bound
+"charging": 0, // 0=not charging, 1=charging
+"storage": 1024, // Total storage capacity (KB)
+"available_storage": 1024, // Available storage (KB)
+"available_record_time": 10000, // Estimated recording time (milliseconds)
+"support_wifi_p2p": 0, // 0=no Wi-Fi direct support, 1=support
+"time": 1587982655000, // Unix timestamp (milliseconds)
+"audio_channel": 1, // Audio channels
+"del_after_sync": 0, // 0=don't delete device files after sync, 1=delete
+"usb_mode": 0, // 0=USB disk mode off, 1=on
+"recording": 0, // 0=not recording, 1=recording
+"ble_protocol_ver": 20, // BLE protocol version
+"sn": "ai1238189441", // Device serial number (string)
+"firm_ver": "1.1", // Device firmware version (string)
+"privacy": 0 // Privacy setting: 0=off, 1=on
+}
+}
+6.21: Set Privacy Mode
+When enabled, prohibits device playback, USB disk function, and device unbinding
+Send: | Protocol Version | Header Identifier | Command: 0x75 | privacy[1] |
+• privacy: 1=enable, 0=disable, 1 byte
+Receive: | Protocol Version | Header Identifier | Command: 0x75 | 0x00 |
+6.22: Get Device Real-time Status
+Send: | Protocol Version | Header Identifier | Command: 0x76 |
+Receive: | Protocol Version | Header Identifier | Command: 0x76 | 0x00 | isRecording[1] | isCharging[1]
+| bound[1] | isPrivacy[1] | isDisk[1] |
+• isRecording: Recording status: 1=recording, 0=not recording, 2=playing
+• isCharging: Charging status: 1=charging, 0=not charging
+• bound: Binding status: 1=bound, 0=unbound
+• isPrivacy: Privacy setting status: 1=privacy mode on, 0=off
+• isDisk: USB disk mode: 1=USB disk mode, 0=not USB disk mode
+6.23: Set Authorization Code Data
+Send: | Protocol Version | Header Identifier | Command: 0x90 | data[30] |
+• data: String (stored locally after receipt)
+Receive: | Protocol Version | Header Identifier | Command: 0x90 | 0x00 |
+6.24: Get Authorization Code Data
+Send: | Protocol Version | Header Identifier | Command: 0x91 |
+Receive: | Protocol Version | Header Identifier | Command: 0x91 | 0x00 | data[30] |
+• data: String (send locally stored authorization code)
+6.25: Set Channel Version
+Send: | Protocol Version | Header Identifier | Command: 0x7A | channel_id[2] |
+• channel_id: Domestic/international channel version
+Receive: | Protocol Version | Header Identifier | Command: 0x7A | 0x00 |
+6.26: Get Channel Version
+Send: | Protocol Version | Header Identifier | Command: 0x7B |
+Receive: | Protocol Version | Header Identifier | Command: 0x7B | 0x00 | channel_id[2] |
+• channel_id: Domestic/international channel version
+6.27: APP Resume Recording
+Send: | Protocol Version | Header Identifier | Command: 0x7E |
+Receive: | Protocol Version | Header Identifier | Command: 0x7E | 0x00 |
+6.28: APP Pause Recording
+Send: | Protocol Version | Header Identifier | Command: 0x7F |
+Receive: | Protocol Version | Header Identifier | Command: 0x7F | 0x00 |
+6.29-6.36: Real-time Translation Button Commands
+6.29: Button A long press start recording (0x92) 6.30: Button A long press release end recording (0x93)
+6.31: Button A single click start recording (0x96) 6.32: Button A single click end recording (0x97) 6.33:
+Button B long press start recording (0x99) 6.34: Button B long press release end recording (0x9a) 6.35:
+Button B single click start recording (0x9d) 6.36: Button B single click end recording (0x9e)
+6.37: Set Noise Reduction Level
+Send: | Protocol Version | Header Identifier | Command: 0xa0 | level_id[2] |
+• level_id: 0=no noise reduction, 1=low, 2=medium, 3=high (1-100 range preferred)
+Receive: | Protocol Version | Header Identifier | Command: 0xa0 | 0x00 |
+6.38: Query Current Noise Reduction Level
+Send: | Protocol Version | Header Identifier | Command: 0xa1 |
+Receive: | Protocol Version | Header Identifier | Command: 0xa1 | 0x00 | level_id[2] |
+6.39: Set Gain Level
+Send: | Protocol Version | Header Identifier | Command: 0xa2 | level_id[2] |
+• level_id: 0=no gain, 1=low, 2=medium, 3=high (1-100 range preferred)
+Receive: | Protocol Version | Header Identifier | Command: 0xa2 | 0x00 |
+6.40: Query Current Gain Level
+Send: | Protocol Version | Header Identifier | Command: 0xa3 |
+Receive: | Protocol Version | Header Identifier | Command: 0xa3 | 0x00 | level_id[2] |
+6.41: Get Device Unique Identifier
+Send: | Protocol Version | Header Identifier | Command: 0xa4 |
+Receive: | Protocol Version | Header Identifier | Command: 0xa4 | 0x00 | sn[9] |
+• sn[9]: Device unique identifier
+7. Device to Software Commands
+7.1: Device Actively Ends Recording Notification
+Receive: | Protocol Version | Header Identifier | Command: 0x77 | id[4] |
+• id: File ID, e.g., current Unix timestamp accurate to seconds, 4 bytes
+7.2: Device Actively Starts Recording Notification
+Receive: | Protocol Version | Header Identifier | Command: 0x78 | id[4] |
+• id: File ID, e.g., current Unix timestamp accurate to seconds, 4 bytes
+7.3: Device Actively Unbinds
+Receive: | Protocol Version | Header Identifier | Command: 0x79 | 0x00 |
+7.4: Device Actively Pauses Recording
+Receive: | Protocol Version | Header Identifier | Command: 0x7D | id[4] |
+• id: File ID, e.g., current Unix timestamp accurate to seconds, 4 bytes
+7.5: Device Actively Resumes Recording
+Receive: | Protocol Version | Header Identifier | Command: 0x7C | id[4] |
+• id: File ID, e.g., current Unix timestamp accurate to seconds, 4 bytes
+7.6: Device Low Battery Broadcast
+Receive: | Protocol Version | Header Identifier | Command: 0xaa | sn[9] | battery[1] | incharge[1] |
+• sn: Device unique identifier
+• battery: 0~100, 1 byte
+• incharge: 0=not charging, 1=charging, 1 byte
