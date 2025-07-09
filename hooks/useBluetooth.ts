@@ -1,34 +1,30 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { BleManager, Device, BleError, Characteristic } from 'react-native-ble-plx';
 import { PermissionsAndroid, Platform, Alert } from 'react-native';
 import { Buffer } from 'buffer';
 import { 
-  BLE_CONSTANTS, 
   RECORDING_COMMANDS,
   ProtocolHelpers,
   CONNECTION_CONFIG,
-  DeviceStatus
 } from '../constants/BluetoothConstants';
 
-export interface DeviceInfo {
-  id: string;
-  name: string | null;
-  rssi: number;
-  isConnected: boolean;
-  batteryLevel?: number;
-  isCharging?: boolean;
-  isRecording?: boolean;
-  deviceStatus?: DeviceStatus;
-}
-
-export interface BluetoothState {
+// Types
+interface BluetoothState {
   isScanning: boolean;
+  error: string | null;
   discoveredDevices: DeviceInfo[];
   connectedDevice: DeviceInfo | null;
   isConnecting: boolean;
   bluetoothState: 'Unknown' | 'Resetting' | 'Unsupported' | 'Unauthorized' | 'PoweredOff' | 'PoweredOn';
-  error: string | null;
   recordingState: RecordingState;
+}
+
+interface DeviceInfo {
+  id: string;
+  name: string;
+  rssi: number;
+  isConnected: boolean;
+  isRecording: boolean;
 }
 
 interface RecordingState {
@@ -55,156 +51,79 @@ interface BluetoothHook {
   resumeRecording: () => Promise<void>;
 }
 
+// Smart Microphone BLE Services and Characteristics
+const MICROPHONE_BLE_CONSTANTS = {
+  SERVICES: {
+    AUDIO_CONTROL: '0011200a-2233-4455-6677-889912345678',
+    AUDIO_DATA: 'e49a25f8-f69a-11e8-8eb2-f2801f1b9fd1',
+  },
+  DEVICE_NAME: 'Smart Microphone',
+};
+
 export const useBluetooth = (): BluetoothHook => {
-  const bleManager = useRef<BleManager>(new BleManager()).current;
-  
   const [state, setState] = useState<BluetoothState>({
     isScanning: false,
+    error: null,
     discoveredDevices: [],
     connectedDevice: null,
     isConnecting: false,
     bluetoothState: 'Unknown',
-    error: null,
     recordingState: {
       isRecording: false,
       isPaused: false,
-      duration: 0
-    }
+      duration: 0,
+    },
   });
 
-  // Request necessary permissions
+  const bleManager = useMemo(() => new BleManager(), []);
+
   const requestPermissions = useCallback(async (): Promise<boolean> => {
-    if (Platform.OS === 'android') {
-      try {
-        const apiLevel = Platform.Version as number;
-        console.log('Android API Level:', apiLevel);
-        
-        let permissionsToRequest: (keyof typeof PermissionsAndroid.PERMISSIONS)[] = [];
-        
-        if (apiLevel >= 31) {
-          // Android 12+ (API 31+) - New Bluetooth permissions
-          permissionsToRequest = [
-            'BLUETOOTH_SCAN',
-            'BLUETOOTH_CONNECT', 
-            'ACCESS_FINE_LOCATION',
-          ];
-          
-          // Check if BLUETOOTH_ADVERTISE is available (some devices might not have it)
-          try {
-            if (PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE) {
-              permissionsToRequest.push('BLUETOOTH_ADVERTISE');
-            }
-          } catch (e) {
-            console.log('BLUETOOTH_ADVERTISE permission not available');
-          }
-        } else if (apiLevel >= 23) {
-          // Android 6+ (API 23-30) - Legacy Bluetooth permissions
-          permissionsToRequest = [
-            'ACCESS_FINE_LOCATION',
-            'ACCESS_COARSE_LOCATION',
-          ];
-        }
-        
-        if (permissionsToRequest.length === 0) {
-          console.log('No permissions needed for this Android version');
-          return true;
-        }
-        
-        console.log('Requesting permissions:', permissionsToRequest);
-        
-        const permissionValues = permissionsToRequest.map(p => PermissionsAndroid.PERMISSIONS[p]);
-        const granted = await PermissionsAndroid.requestMultiple(permissionValues);
-        console.log('Permission results:', granted);
-
-        const deniedPermissions = Object.entries(granted)
-          .filter(([_, result]) => result !== PermissionsAndroid.RESULTS.GRANTED)
-          .map(([permission, _]) => permission);
-
-        if (deniedPermissions.length > 0) {
-          console.log('Denied permissions:', deniedPermissions);
-          
-          Alert.alert(
-            'Permissions Required',
-            `The following permissions are required for Bluetooth functionality:\n\n${deniedPermissions.map(p => 
-              p.replace('android.permission.', '').replace('_', ' ')
-            ).join('\n')}\n\nPlease grant these permissions in Settings to use the app.`,
-            [
-              { text: 'Cancel', style: 'cancel' },
-              { 
-                text: 'Open Settings', 
-                onPress: () => {
-                  // Note: You might want to add react-native-settings or similar package
-                  // for now, just show a message
-                  Alert.alert('Settings', 'Please manually open Settings > Apps > BLE Audio Sim > Permissions and grant the required permissions.');
-                }
-              }
-            ]
-          );
-          return false;
-        }
-
-        console.log('All permissions granted successfully');
-        return true;
-        
-      } catch (error) {
-        console.error('Permission request failed:', error);
-        Alert.alert(
-          'Permission Error',
-          `Failed to request permissions: ${error}`,
-          [{ text: 'OK' }]
-        );
-        return false;
-      }
+    if (Platform.OS === 'ios') {
+      return true;
     }
-    
-    // iOS doesn't need runtime permission requests for Bluetooth
-    return true;
+
+    if (Platform.OS === 'android' && PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION) {
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+        {
+          title: 'Bluetooth Permission',
+          message: 'This app needs access to Bluetooth to connect to your Smart Microphone.',
+          buttonNeutral: 'Ask Me Later',
+          buttonNegative: 'Cancel',
+          buttonPositive: 'OK',
+        },
+      );
+      return granted === PermissionsAndroid.RESULTS.GRANTED;
+    }
+    return false;
   }, []);
 
-  // Initialize Bluetooth manager and check state
-  const initializeBluetooth = useCallback(async () => {
-    try {
-      const hasPermissions = await requestPermissions();
-      console.log('hasPermissions', hasPermissions);
-      if (!hasPermissions) {
-        setState(prev => ({ ...prev, error: 'Bluetooth permissions not granted' }));
-        return false;
-      }
+  const stopScan = useCallback(() => {
+    bleManager.stopDeviceScan();
+    setState(prev => ({ ...prev, isScanning: false }));
+    console.log('Smart Microphone scan completed');
+  }, [bleManager]);
 
-      const state = await bleManager.state();
-      setState(prev => ({ ...prev, bluetoothState: state }));
-
-      if (state !== 'PoweredOn') {
-        setState(prev => ({ ...prev, error: 'Bluetooth is not powered on' }));
-        return false;
-      }
-
-      return true;
-    } catch (error) {
-      setState(prev => ({ ...prev, error: `Bluetooth initialization failed: ${error}` }));
-      return false;
-    }
-  }, [bleManager, requestPermissions]);
-
-  // Start scanning for devices
   const startScan = useCallback(async (): Promise<void> => {
     const hasPermissions = await requestPermissions();
-    if (!hasPermissions) return;
+    if (!hasPermissions) {
+      console.error('Bluetooth permissions not granted');
+      setState(prev => ({ ...prev, error: 'Bluetooth permissions not granted' }));
+      return;
+    }
 
     try {
       setState(prev => ({ ...prev, isScanning: true, error: null }));
       
-      console.log('Starting BLE scan for voice recording devices...');
+      console.log('Starting BLE scan for Smart Microphone devices...');
       
       // Clear previous devices
       setState(prev => ({ ...prev, discoveredDevices: [] }));
 
       // Start scanning for devices
       await bleManager.startDeviceScan(
-        null, // Show all devices instead of filtering by services
-        { 
-          allowDuplicates: false, // Reduce noise in the device list
-        }, 
+        null,
+        { allowDuplicates: false },
         (error, device) => {
           if (error) {
             console.error('Scan error:', error);
@@ -212,80 +131,128 @@ export const useBluetooth = (): BluetoothHook => {
             return;
           }
 
+          // Log all discovered devices for debugging
           if (device) {
-            // Enhanced device logging
             console.log('Found device:', {
               id: device.id,
-              name: device.name || device.localName,
-              rssi: device.rssi,
+              name: device.name,
+              localName: device.localName,
               serviceUUIDs: device.serviceUUIDs,
               manufacturerData: device.manufacturerData,
-              isConnectable: device.isConnectable,
-              serviceData: device.serviceData,
+              rssi: device.rssi,
             });
 
-            // Add all discoverable devices
-            const deviceInfo: DeviceInfo = {
-              id: device.id,
-              name: device.name || device.localName || 'Unknown Device',
-              rssi: device.rssi || -100,
-              isConnected: false,
-              isRecording: false,
-            };
+            // More lenient device name matching
+            const deviceName = (device.name || device.localName || '').toLowerCase();
+            const isTargetDevice = 
+              deviceName.includes('smart') || 
+              deviceName.includes('mic') ||
+              deviceName.includes('audio') ||
+              // Also check for known service UUIDs
+              device.serviceUUIDs?.some(uuid => 
+                uuid.toLowerCase() === MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_CONTROL.toLowerCase() ||
+                uuid.toLowerCase() === MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_DATA.toLowerCase()
+              );
 
-            // Check if this might be a voice recorder
-            if (device.name?.toLowerCase().includes('smart') || 
-                device.name?.toLowerCase().includes('rec') ||
-                device.name?.toLowerCase().includes('voice') ||
-                device.name?.toLowerCase().includes('audio') ||
-                device.localName?.toLowerCase().includes('smart') ||
-                device.localName?.toLowerCase().includes('rec') ||
-                device.localName?.toLowerCase().includes('voice') ||
-                device.localName?.toLowerCase().includes('audio')) {
-              deviceInfo.name = `🎙️ ${deviceInfo.name} (Possible Voice Recorder)`;
-              console.log('✅ POTENTIAL VOICE RECORDER FOUND:', deviceInfo);
+            if (isTargetDevice) {
+              console.log('Found potential Smart Microphone device:', device.name || device.localName);
+              const deviceInfo: DeviceInfo = {
+                id: device.id,
+                name: device.name || device.localName || 'Smart Microphone',
+                rssi: device.rssi || -100,
+                isConnected: false,
+                isRecording: false,
+              };
+              setState(prev => ({
+                ...prev,
+                discoveredDevices: [...prev.discoveredDevices.filter(d => d.id !== device.id), deviceInfo],
+              }));
             }
-
-            setState(prev => {
-              const existingDeviceIndex = prev.discoveredDevices.findIndex(d => d.id === device.id);
-              
-              if (existingDeviceIndex !== -1) {
-                // Update existing device
-                const updatedDevices = [...prev.discoveredDevices];
-                updatedDevices[existingDeviceIndex] = deviceInfo;
-                return { ...prev, discoveredDevices: updatedDevices };
-              } else {
-                // Add new device
-                console.log('Adding device to list:', deviceInfo);
-                return { ...prev, discoveredDevices: [...prev.discoveredDevices, deviceInfo] };
-              }
-            });
           }
-        }
+        },
       );
 
-      // Extended scan time for better device discovery
+      // Stop scan after timeout
       setTimeout(() => {
-        bleManager.stopDeviceScan();
-        setState(prev => ({ ...prev, isScanning: false }));
-        console.log('Voice recorder scan completed');
-      }, CONNECTION_CONFIG.SCAN_DURATION * 2); // Double the scan time
-
-    } catch (error: any) {
-      console.error('Failed to start scan:', error);
-      setState(prev => ({ ...prev, isScanning: false, error: error.message }));
+        stopScan();
+      }, CONNECTION_CONFIG.SCAN_DURATION);
+    } catch (error) {
+      console.error('Start scan error:', error);
+      setState(prev => ({ ...prev, isScanning: false, error: (error as Error).message }));
     }
-  }, [bleManager, requestPermissions]);
+  }, [bleManager, requestPermissions, stopScan]);
+
+  const connectToDevice = useCallback(async (deviceId: string): Promise<void> => {
+    try {
+      setState(prev => ({ ...prev, isConnecting: true, error: null }));
+      
+      console.log(`Attempting to connect to Smart Microphone: ${deviceId}`);
+      
+      // Connect to device
+      const device = await bleManager.connectToDevice(deviceId, {
+        timeout: 10000,
+        requestMTU: 517, // Request maximum MTU for better data transfer
+        autoConnect: true,
+      });
+      
+      console.log('Connected, discovering services...');
+      await device.discoverAllServicesAndCharacteristics();
+      
+      // Get all services
+      const services = await device.services();
+      console.log('Discovered services:', services.map(s => s.uuid));
+
+      // Validate required services
+      const hasAudioControl = services.some(s => 
+        s.uuid.toLowerCase() === MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_CONTROL.toLowerCase()
+      );
+      const hasAudioData = services.some(s => 
+        s.uuid.toLowerCase() === MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_DATA.toLowerCase()
+      );
+
+      if (!hasAudioControl || !hasAudioData) {
+        throw new Error('Device validation failed: Missing required audio services');
+      }
+
+      // Set connection priority to high for better audio streaming
+      if (Platform.OS === 'android') {
+        try {
+          // @ts-ignore: Android-specific method
+          await device.requestConnectionPriority(1); // HIGH
+        } catch (error) {
+          console.warn('Failed to set connection priority:', error);
+        }
+      }
+
+      const deviceInfo: DeviceInfo = {
+        id: device.id,
+        name: device.name || 'Smart Microphone',
+        rssi: device.rssi || -100,
+        isConnected: true,
+        isRecording: false,
+      };
+
+      setState(prev => ({
+        ...prev,
+        connectedDevice: deviceInfo,
+        isConnecting: false,
+      }));
+
+      console.log('Successfully connected to Smart Microphone');
+    } catch (error) {
+      console.error('Connection error:', error);
+      setState(prev => ({ ...prev, isConnecting: false, error: (error as Error).message }));
+      throw error;
+    }
+  }, [bleManager]);
 
   // Helper function to identify voice recording devices
   const isVoiceRecorderDevice = useCallback((device: Device): boolean => {
     if (!device.serviceUUIDs) return false;
 
     const expectedServices = [
-      BLE_CONSTANTS.SERVICES.COMMAND.toLowerCase(),
-      BLE_CONSTANTS.SERVICES.AUDIO_STREAM.toLowerCase(),
-      BLE_CONSTANTS.SERVICES.FILE_STREAM.toLowerCase(),
-      BLE_CONSTANTS.SERVICES.OTA_STREAM.toLowerCase(),
+      MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_CONTROL.toLowerCase(),
+      MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_DATA.toLowerCase(),
     ];
 
     const deviceServices = device.serviceUUIDs.map(uuid => 
@@ -311,68 +278,7 @@ export const useBluetooth = (): BluetoothHook => {
     return hasExpectedService || isVoiceRecorderName;
   }, []);
 
-  // Enhanced connection with better validation
-  const connectToDevice = useCallback(async (deviceId: string): Promise<void> => {
-    try {
-      setState(prev => ({ ...prev, isConnecting: true, error: null }));
-      
-      console.log(`Attempting to connect to device: ${deviceId}`);
-      
-      // Connect to device with extended timeout
-      const device = await bleManager.connectToDevice(deviceId, {
-        timeout: CONNECTION_CONFIG.CONNECTION_TIMEOUT * 2,
-        requestMTU: 517, // Request larger MTU for better data transfer
-      });
-      
-      console.log('Connected, discovering services...');
-      await device.discoverAllServicesAndCharacteristics();
-      
-      // Get all services and log them
-      const services = await device.services();
-      console.log('Discovered services:', services.map(s => s.uuid));
-      
-      // Set up monitoring for notifications
-      const commandService = services.find(s => 
-        s.uuid.toLowerCase().includes('fff9') || // Command service
-        s.uuid.toLowerCase().includes('ffe0')    // Alternative command service
-      );
-      
-      if (commandService) {
-        await setupDeviceNotifications(device, commandService);
-      } else {
-        console.log('Warning: Command service not found, some features may not work');
-      }
-      
-      // Update device info
-      const deviceInfo: DeviceInfo = {
-        id: device.id,
-        name: device.name || 'Connected Device',
-        rssi: device.rssi || -100,
-        isConnected: true,
-        isRecording: false,
-      };
-
-      setState(prev => ({
-        ...prev,
-        isConnecting: false,
-        connectedDevice: deviceInfo,
-        error: null
-      }));
-
-      console.log('Successfully connected to device:', deviceInfo);
-
-    } catch (error: any) {
-      console.error('Connection failed:', error);
-      setState(prev => ({
-        ...prev,
-        isConnecting: false,
-        error: `Connection failed: ${error.message}. Try moving closer to the device or restarting it.`
-      }));
-      throw error;
-    }
-  }, [bleManager]);
-
-  // Service validation helper
+  // Enhanced service validation helper
   const validateVoiceRecorderServices = useCallback((services: any[]): {
     isCompatible: boolean;
     commandService?: any;
@@ -381,93 +287,36 @@ export const useBluetooth = (): BluetoothHook => {
     reason?: string;
   } => {
     const expectedServices = {
-      command: BLE_CONSTANTS.SERVICES.COMMAND.toLowerCase().replace(/-/g, ''),
-      audio: BLE_CONSTANTS.SERVICES.AUDIO_STREAM.toLowerCase().replace(/-/g, ''),
-      file: BLE_CONSTANTS.SERVICES.FILE_STREAM.toLowerCase().replace(/-/g, ''),
-      ota: BLE_CONSTANTS.SERVICES.OTA_STREAM.toLowerCase().replace(/-/g, ''),
+      command: MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_CONTROL.toLowerCase(),
+      audio: MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_DATA.toLowerCase(),
     };
 
     const foundServices = {
       command: null as any,
       audio: null as any,
-      file: null as any,
-      ota: null as any,
     };
 
     // Check each service
     for (const service of services) {
       const serviceUuid = service.uuid.toLowerCase().replace(/-/g, '');
       
-      if (serviceUuid.includes(expectedServices.command) || expectedServices.command.includes(serviceUuid)) {
+      if (serviceUuid.includes(expectedServices.command)) {
         foundServices.command = service;
-      } else if (serviceUuid.includes(expectedServices.audio) || expectedServices.audio.includes(serviceUuid)) {
+      } else if (serviceUuid.includes(expectedServices.audio)) {
         foundServices.audio = service;
-      } else if (serviceUuid.includes(expectedServices.file) || expectedServices.file.includes(serviceUuid)) {
-        foundServices.file = service;
-      } else if (serviceUuid.includes(expectedServices.ota) || expectedServices.ota.includes(serviceUuid)) {
-        foundServices.ota = service;
       }
     }
 
-    // Require at least command service for basic compatibility
-    const isCompatible = foundServices.command !== null;
+    // Require at least command and audio services for basic functionality
+    const isCompatible = foundServices.command !== null && foundServices.audio !== null;
     
     return {
       isCompatible,
       commandService: foundServices.command,
       audioService: foundServices.audio,
-      fileService: foundServices.file,
-      reason: isCompatible ? 'Compatible voice recorder' : 'Missing required command service (FFF9)',
+      fileService: null, // No file service in this model
+      reason: isCompatible ? 'Compatible Smart Microphone' : 'Missing required services (0011200a and e49a25f8)',
     };
-  }, []);
-
-  // Set up device notifications
-  const setupDeviceNotifications = useCallback(async (device: Device, commandService: any): Promise<void> => {
-    try {
-      const characteristics = await commandService.characteristics();
-      console.log('Command service characteristics:', characteristics.map((c: any) => c.uuid));
-      
-      // Find notification characteristic
-      const notifyChar = characteristics.find((c: any) => 
-        c.uuid.toLowerCase().includes(BLE_CONSTANTS.CHARACTERISTICS.COMMAND_NOTIFY.toLowerCase()) ||
-        c.isNotifiable
-      );
-      
-      if (notifyChar) {
-        console.log('Setting up notifications on:', notifyChar.uuid);
-        
-        await device.monitorCharacteristicForService(
-          commandService.uuid,
-          notifyChar.uuid,
-          (error: BleError | null, characteristic: Characteristic | null) => {
-            if (error) {
-              console.error('Notification error:', error);
-              return;
-            }
-
-            if (characteristic && characteristic.value) {
-              try {
-                const data = Buffer.from(characteristic.value, 'base64');
-                console.log('Received voice recorder data:', Array.from(data));
-                
-                // Parse response according to protocol
-                handleVoiceRecorderResponse(data);
-                
-              } catch (parseError) {
-                console.error('Failed to parse voice recorder response:', parseError);
-              }
-            }
-          }
-        );
-        
-        console.log('✅ Voice recorder notifications set up successfully');
-      } else {
-        console.log('⚠️ No notification characteristic found');
-      }
-      
-    } catch (error) {
-      console.error('Failed to set up notifications:', error);
-    }
   }, []);
 
   // Handle voice recorder responses
@@ -475,7 +324,7 @@ export const useBluetooth = (): BluetoothHook => {
     if (data.length === 0) return;
 
     // Parse according to your protocol document
-    console.log('Processing voice recorder response:', {
+    console.log('Processing Smart Microphone response:', {
       length: data.length,
       data: Array.from(data),
       hex: data.toString('hex'),
@@ -506,12 +355,54 @@ export const useBluetooth = (): BluetoothHook => {
     }
   }, []);
 
-  // Stop scanning
-  const stopScan = useCallback(() => {
-    bleManager.stopDeviceScan();
-    setState(prev => ({ ...prev, isScanning: false }));
-    console.log('Scan stopped by user');
-  }, [bleManager]);
+  // Enhanced notification setup
+  const setupDeviceNotifications = useCallback(async (device: Device, commandService: any): Promise<void> => {
+    try {
+      const characteristics = await commandService.characteristics();
+      console.log('Command service characteristics:', characteristics.map((c: any) => c.uuid));
+      
+      // Find notification characteristic
+      const notifyChar = characteristics.find((c: any) => 
+        c.uuid.toLowerCase().includes(MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_DATA.toLowerCase()) ||
+        c.isNotifiable
+      );
+      
+      if (notifyChar) {
+        console.log('Setting up notifications on:', notifyChar.uuid);
+        
+        await device.monitorCharacteristicForService(
+          commandService.uuid,
+          notifyChar.uuid,
+          (error: BleError | null, characteristic: Characteristic | null) => {
+            if (error) {
+              console.error('Notification error:', error);
+              return;
+            }
+
+            if (characteristic && characteristic.value) {
+              try {
+                const data = Buffer.from(characteristic.value, 'base64');
+                console.log('Received Smart Microphone data:', Array.from(data));
+                
+                // Parse response according to protocol
+                handleVoiceRecorderResponse(data);
+                
+              } catch (parseError) {
+                console.error('Failed to parse Smart Microphone response:', parseError);
+              }
+            }
+          }
+        );
+        
+        console.log('✅ Smart Microphone notifications set up successfully');
+      } else {
+        console.log('⚠️ No notification characteristic found');
+      }
+      
+    } catch (error) {
+      console.error('Failed to set up notifications:', error);
+    }
+  }, [handleVoiceRecorderResponse]);
 
   // Disconnect from device
   const disconnectDevice = useCallback(async (): Promise<void> => {
@@ -541,8 +432,8 @@ export const useBluetooth = (): BluetoothHook => {
       const base64Command = Buffer.from(commandFrame).toString('base64');
       
       await device.writeCharacteristicWithResponseForService(
-        BLE_CONSTANTS.SERVICES.COMMAND,
-        BLE_CONSTANTS.CHARACTERISTICS.COMMAND_WRITE,
+        MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_CONTROL,
+        MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_DATA,
         base64Command
       );
       
