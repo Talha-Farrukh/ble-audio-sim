@@ -1,198 +1,117 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, FlatList, StyleSheet, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, FlatList } from 'react-native';
 import { useBluetooth } from '../hooks/useBluetooth';
+import { ConnectedDeviceView } from './ConnectedDeviceView';
 
 export const DeviceScanner: React.FC = () => {
-  const {
-    isScanning,
-    devices,
-    connectedDevice,
-    isConnecting,
-    connectionError,
-    startScan,
-    stopScan,
+  const { 
+    startScan, 
+    stopScan, 
     connectToDevice,
-    disconnectDevice,
-    recordingState,
+    disconnectFromDevice,
     startRecording,
     stopRecording,
-    pauseRecording,
-    resumeRecording,
+    state: { 
+      isScanning, 
+      discoveredDevices, 
+      connectedDevice,
+      error,
+      recordingState,
+      batteryState,
+    },
   } = useBluetooth();
 
   const handleConnect = async (deviceId: string) => {
     try {
       await connectToDevice(deviceId);
-    } catch (error: any) {
-      Alert.alert('Connection Failed', error.message || 'Unknown error occurred');
+    } catch (error) {
+      console.error('Failed to connect:', error);
     }
   };
 
-  const handleRecordingControl = async (action: 'start' | 'stop' | 'pause' | 'resume') => {
+  const handleDisconnect = async () => {
     try {
-      switch (action) {
-        case 'start':
-          await startRecording();
-          break;
-        case 'stop':
-          await stopRecording();
-          break;
-        case 'pause':
-          await pauseRecording();
-          break;
-        case 'resume':
-          await resumeRecording();
-          break;
-      }
-    } catch (error: any) {
-      Alert.alert('Recording Error', error.message || 'Failed to control recording');
+      await disconnectFromDevice();
+    } catch (error) {
+      console.error('Failed to disconnect:', error);
     }
   };
 
-  const renderDeviceItem = ({ item }: { item: any }) => {
-    const isVoiceRecorder = item.name.includes('🎙️');
-    
+  // If we have a connected device, show the ConnectedDeviceView
+  if (connectedDevice) {
     return (
-      <View style={[styles.deviceItem, isVoiceRecorder && styles.voiceRecorderItem]}>
-        <View style={styles.deviceInfo}>
-          <Text style={[styles.deviceName, isVoiceRecorder && styles.voiceRecorderName]}>
-            {item.name}
-          </Text>
-          <Text style={styles.deviceDetails}>
-            ID: {item.id} | RSSI: {item.rssi}dBm
-          </Text>
-          {item.isConnected && (
-            <Text style={styles.connectedIndicator}>✅ Connected</Text>
-          )}
-        </View>
-        <TouchableOpacity
-          style={[
-            styles.connectButton,
-            item.isConnected && styles.disconnectButton,
-            isVoiceRecorder && styles.voiceRecorderButton
-          ]}
-          onPress={() => item.isConnected ? disconnectDevice() : handleConnect(item.id)}
-          disabled={isConnecting}
-        >
-          <Text style={styles.connectButtonText}>
-            {isConnecting ? '...' : item.isConnected ? 'Disconnect' : 'Connect'}
-          </Text>
-        </TouchableOpacity>
-      </View>
+      <ConnectedDeviceView 
+        device={connectedDevice}
+        batteryState={batteryState}
+        onDisconnect={handleDisconnect}
+        onStartRecording={startRecording}
+        onStopRecording={stopRecording}
+        isRecording={recordingState.isRecording}
+      />
     );
-  };
+  }
 
+  // Otherwise show the scanning view
   return (
     <View style={styles.container}>
-      {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>Voice Recorder Scanner</Text>
-        <Text style={styles.subtitle}>
-          Looking for devices with services: FFF9, FFF3, FFFC, FFF0
-        </Text>
-      </View>
-
-      {/* Scanning Controls */}
-      <View style={styles.controls}>
+        <Text style={styles.title}>Available Devices</Text>
         <TouchableOpacity
-          style={[styles.scanButton, isScanning && styles.scanning]}
+          style={[styles.scanButton, isScanning && styles.scanningButton]}
           onPress={isScanning ? stopScan : startScan}
-          disabled={isConnecting}
         >
           <Text style={styles.scanButtonText}>
-            {isScanning ? '🔄 Scanning...' : '🔍 Start Scan'}
+            {isScanning ? 'Stop Scan' : 'Start Scan'}
           </Text>
         </TouchableOpacity>
       </View>
 
-      {/* Status Information */}
-      {connectionError && (
+      {error && (
         <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>❌ {connectionError}</Text>
+          <Text style={styles.errorText}>{error}</Text>
         </View>
       )}
 
       {isScanning && (
-        <View style={styles.statusContainer}>
-          <Text style={styles.statusText}>
-            🔄 Scanning for voice recording devices...
-          </Text>
-          <Text style={styles.statusSubtext}>
-            Make sure your voice recorder is powered on and in pairing mode
-          </Text>
+        <View style={styles.scanningContainer}>
+          <ActivityIndicator size="large" color="#0000ff" />
+          <Text style={styles.scanningText}>Scanning for devices...</Text>
         </View>
       )}
 
-      {!isScanning && devices.length === 0 && (
-        <View style={styles.statusContainer}>
-          <Text style={styles.statusText}>🎙️ No voice recorders found</Text>
-          <Text style={styles.statusSubtext}>
-            • Ensure your device is powered on{'\n'}
-            • Make sure it's in pairing mode{'\n'}
-            • Try moving closer to the device{'\n'}
-            • Some devices may need multiple scan attempts
-          </Text>
-        </View>
-      )}
-
-      {/* Device List */}
       <FlatList
-        data={devices}
+        data={discoveredDevices}
         keyExtractor={(item) => item.id}
-        renderItem={renderDeviceItem}
-        style={styles.deviceList}
-        showsVerticalScrollIndicator={false}
+        renderItem={({ item }) => (
+          <TouchableOpacity
+            style={styles.deviceItem}
+            onPress={() => handleConnect(item.id)}
+          >
+            <View>
+              <Text style={styles.deviceName}>{item.name}</Text>
+              <Text style={styles.deviceInfo}>
+                Signal Strength: {item.rssi} dBm
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.connectButton}
+              onPress={() => handleConnect(item.id)}
+            >
+              <Text style={styles.connectButtonText}>Connect</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        )}
+        ListEmptyComponent={
+          !isScanning ? (
+            <View style={styles.emptyContainer}>
+              <Text style={styles.emptyText}>
+                No devices found. Tap 'Start Scan' to begin searching.
+              </Text>
+            </View>
+          ) : null
+        }
+        contentContainerStyle={styles.listContent}
       />
-
-      {/* Recording Controls */}
-      {connectedDevice && (
-        <View style={styles.recordingControls}>
-          <Text style={styles.recordingTitle}>
-            🎙️ Recording Controls
-          </Text>
-          <Text style={styles.recordingStatus}>
-            Status: {recordingState.isRecording 
-              ? (recordingState.isPaused ? '⏸️ Paused' : '🔴 Recording') 
-              : '⏹️ Stopped'}
-          </Text>
-          
-          <View style={styles.recordingButtons}>
-            {!recordingState.isRecording ? (
-              <TouchableOpacity
-                style={[styles.recordingButton, styles.startButton]}
-                onPress={() => handleRecordingControl('start')}
-              >
-                <Text style={styles.recordingButtonText}>▶️ Start</Text>
-              </TouchableOpacity>
-            ) : (
-              <>
-                <TouchableOpacity
-                  style={[styles.recordingButton, styles.stopButton]}
-                  onPress={() => handleRecordingControl('stop')}
-                >
-                  <Text style={styles.recordingButtonText}>⏹️ Stop</Text>
-                </TouchableOpacity>
-                
-                {recordingState.isPaused ? (
-                  <TouchableOpacity
-                    style={[styles.recordingButton, styles.resumeButton]}
-                    onPress={() => handleRecordingControl('resume')}
-                  >
-                    <Text style={styles.recordingButtonText}>▶️ Resume</Text>
-                  </TouchableOpacity>
-                ) : (
-                  <TouchableOpacity
-                    style={[styles.recordingButton, styles.pauseButton]}
-                    onPress={() => handleRecordingControl('pause')}
-                  >
-                    <Text style={styles.recordingButtonText}>⏸️ Pause</Text>
-                  </TouchableOpacity>
-                )}
-              </>
-            )}
-          </View>
-        </View>
-      )}
     </View>
   );
 };
@@ -200,225 +119,105 @@ export const DeviceScanner: React.FC = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    padding: 20,
     backgroundColor: '#f5f5f5',
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    backgroundColor: 'white',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e1e1e1',
   },
   title: {
     fontSize: 24,
     fontWeight: 'bold',
-    textAlign: 'center',
-    marginBottom: 20,
-    color: '#333',
-  },
-  errorContainer: {
-    backgroundColor: '#ffebee',
-    padding: 10,
-    borderRadius: 8,
-    marginBottom: 15,
-    borderLeftWidth: 4,
-    borderLeftColor: '#f44336',
-  },
-  errorText: {
-    color: '#c62828',
-    fontSize: 14,
-    lineHeight: 20,
-  },
-  scanControls: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 20,
+    color: '#2c3e50',
   },
   scanButton: {
-    backgroundColor: '#2196F3',
+    backgroundColor: '#3498db',
     paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 8,
+    paddingVertical: 10,
+    borderRadius: 25,
   },
   scanningButton: {
-    backgroundColor: '#FF9800',
+    backgroundColor: '#e74c3c',
   },
   scanButtonText: {
     color: 'white',
     fontSize: 16,
     fontWeight: '600',
   },
-  deviceCount: {
-    fontSize: 14,
-    color: '#666',
+  errorContainer: {
+    backgroundColor: '#ffebee',
+    padding: 10,
+    margin: 10,
+    borderRadius: 8,
   },
-  connectedDeviceStatus: {
-    backgroundColor: '#e8f5e8',
-    padding: 15,
-    borderRadius: 10,
-    marginBottom: 20,
-    borderLeftWidth: 4,
-    borderLeftColor: '#4CAF50',
+  errorText: {
+    color: '#c62828',
+    textAlign: 'center',
   },
-  connectedDeviceTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#2e7d32',
-    marginBottom: 10,
-  },
-  recordingControls: {
-    marginTop: 10,
-  },
-  recordingStatus: {
-    fontSize: 14,
-    color: '#555',
-    marginBottom: 10,
-  },
-  recordingButtons: {
+  scanningContainer: {
     flexDirection: 'row',
-    gap: 10,
-  },
-  recordingButton: {
-    paddingHorizontal: 15,
-    paddingVertical: 8,
-    borderRadius: 6,
-    minWidth: 80,
     alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+    backgroundColor: '#e3f2fd',
+    margin: 10,
+    borderRadius: 8,
   },
-  recordingButtonText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: '600',
+  scanningText: {
+    marginLeft: 10,
+    fontSize: 16,
+    color: '#1976d2',
   },
-  startButton: {
-    backgroundColor: '#4CAF50',
-  },
-  stopButton: {
-    backgroundColor: '#f44336',
-  },
-  pauseButton: {
-    backgroundColor: '#FF9800',
-  },
-  recordButtonText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  deviceList: {
-    flex: 1,
+  listContent: {
+    padding: 10,
   },
   deviceItem: {
-    backgroundColor: 'white',
-    padding: 15,
-    marginVertical: 5,
-    borderRadius: 10,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    backgroundColor: 'white',
+    padding: 15,
+    marginVertical: 5,
+    borderRadius: 12,
     elevation: 2,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
-  },
-  deviceInfo: {
-    flex: 1,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
   },
   deviceName: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '600',
-    color: '#333',
+    color: '#2c3e50',
     marginBottom: 4,
   },
-  deviceDetails: {
-    fontSize: 12,
-    color: '#666',
-  },
-  connectedText: {
-    fontSize: 12,
-    color: '#4CAF50',
-    fontWeight: '600',
-    marginTop: 4,
+  deviceInfo: {
+    fontSize: 14,
+    color: '#7f8c8d',
   },
   connectButton: {
-    backgroundColor: '#2196F3',
+    backgroundColor: '#2ecc71',
     paddingHorizontal: 15,
     paddingVertical: 8,
-    borderRadius: 6,
-    minWidth: 80,
-    alignItems: 'center',
-  },
-  connectedButton: {
-    backgroundColor: '#4CAF50',
-  },
-  connectingButton: {
-    backgroundColor: '#FF9800',
+    borderRadius: 20,
   },
   connectButtonText: {
     color: 'white',
     fontSize: 14,
     fontWeight: '600',
   },
-  emptyText: {
-    textAlign: 'center',
-    color: '#666',
-    fontSize: 16,
-    marginTop: 50,
-  },
-  header: {
-    marginBottom: 20,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: '#666',
-  },
-  controls: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+  emptyContainer: {
+    padding: 20,
     alignItems: 'center',
-    marginBottom: 20,
   },
-  scanning: {
-    backgroundColor: '#FF9800',
-  },
-  statusContainer: {
-    backgroundColor: '#e8f5e8',
-    padding: 15,
-    borderRadius: 10,
-    marginBottom: 20,
-    borderLeftWidth: 4,
-    borderLeftColor: '#4CAF50',
-  },
-  statusText: {
+  emptyText: {
     fontSize: 16,
-    fontWeight: '600',
-    color: '#2e7d32',
-    marginBottom: 10,
-  },
-  statusSubtext: {
-    fontSize: 12,
-    color: '#666',
-  },
-  recordingTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#2e7d32',
-    marginBottom: 10,
-  },
-  resumeButton: {
-    backgroundColor: '#4CAF50',
-  },
-  voiceRecorderItem: {
-    backgroundColor: '#f0f0f0',
-  },
-  voiceRecorderName: {
-    fontWeight: 'bold',
-  },
-  connectedIndicator: {
-    fontSize: 12,
-    color: '#4CAF50',
-    fontWeight: '600',
-    marginTop: 4,
-  },
-  disconnectButton: {
-    backgroundColor: '#f44336',
-  },
-  voiceRecorderButton: {
-    backgroundColor: '#FF9800',
+    color: '#7f8c8d',
+    textAlign: 'center',
   },
 }); 

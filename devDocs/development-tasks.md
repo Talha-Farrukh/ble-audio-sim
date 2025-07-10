@@ -64,10 +64,10 @@ Building a React Native Expo app that connects to a wearable voice recording dev
 ## Phase 3: Recording Controls & Real-time Monitoring 🎙️
 
 ### Task 3.1: Recording Controller Component
-- [ ] Create start/pause/stop recording buttons
-- [ ] Implement recording state management
-- [ ] Add visual feedback for recording status
-- [ ] Create recording timer display
+- [x] Create start/pause/stop recording buttons
+- [x] Implement recording state management
+- [x] Add visual feedback for recording status
+- [x] Create recording timer display
 - [ ] Add voice level indicators
 
 ### Task 3.2: Real-time Recording Progress
@@ -78,10 +78,10 @@ Building a React Native Expo app that connects to a wearable voice recording dev
 - [ ] Add recording quality settings
 
 **Files to create:**
-- `components/RecordingController.tsx`
+- `components/RecordingController.tsx` ✅ (Implemented in ConnectedDeviceView)
 - `components/RecordingProgress.tsx`
 - `components/AudioVisualizer.tsx`
-- `hooks/useRecordingState.ts`
+- `hooks/useRecordingState.ts` ✅ (Implemented in useBluetooth)
 
 **Testing Milestone:** Successfully control recording on wearable device with real-time feedback
 

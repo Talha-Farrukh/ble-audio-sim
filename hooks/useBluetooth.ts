@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { BleManager, Device, BleError, Characteristic } from 'react-native-ble-plx';
+import { BleManager as BleManagerClass, Device, BleError, Characteristic, State as BluetoothManagerState } from 'react-native-ble-plx';
 import { PermissionsAndroid, Platform, Alert } from 'react-native';
 import { Buffer } from 'buffer';
 import { 
@@ -11,15 +11,26 @@ import {
 // Types
 interface BluetoothState {
   isScanning: boolean;
-  error: string | null;
-  discoveredDevices: DeviceInfo[];
-  connectedDevice: DeviceInfo | null;
   isConnecting: boolean;
-  bluetoothState: 'Unknown' | 'Resetting' | 'Unsupported' | 'Unauthorized' | 'PoweredOff' | 'PoweredOn';
+  error: string | null;
+  connectedDevice: DeviceInfo | null;
+  discoveredDevices: DeviceInfo[];
+  bluetoothState: BluetoothManagerState;
   recordingState: RecordingState;
+  batteryState: {
+    level: number;
+    isCharging: boolean;
+    lastUpdated: number;
+  };
+  deviceServices: {
+    commandServiceUuid?: string;
+    audioServiceUuid?: string;
+    commandWriteCharUuid?: string;
+    commandNotifyCharUuid?: string;
+  };
 }
 
-interface DeviceInfo {
+export interface DeviceInfo {
   id: string;
   name: string;
   rssi: number;
@@ -34,17 +45,11 @@ interface RecordingState {
 }
 
 interface BluetoothHook {
-  isScanning: boolean;
-  devices: DeviceInfo[];
-  connectedDevice: DeviceInfo | null;
-  isConnecting: boolean;
-  connectionError: string | null;
+  state: BluetoothState;
   startScan: () => Promise<void>;
   stopScan: () => void;
   connectToDevice: (deviceId: string) => Promise<void>;
-  disconnectDevice: () => Promise<void>;
-  sendCommand: (command: number, data?: number[]) => Promise<void>;
-  recordingState: RecordingState;
+  disconnectFromDevice: () => Promise<void>;
   startRecording: () => Promise<void>;
   stopRecording: () => Promise<void>;
   pauseRecording: () => Promise<void>;
@@ -54,28 +59,127 @@ interface BluetoothHook {
 // Smart Microphone BLE Services and Characteristics
 const MICROPHONE_BLE_CONSTANTS = {
   SERVICES: {
-    AUDIO_CONTROL: '0011200a-2233-4455-6677-889912345678',
-    AUDIO_DATA: 'e49a25f8-f69a-11e8-8eb2-f2801f1b9fd1',
+    COMMAND: 'FFF9',  // Command service for recording control
+    AUDIO_STREAM: 'FFF3', // Audio streaming service
   },
-  DEVICE_NAME: 'Smart Microphone',
+  CHARACTERISTICS: {
+    COMMAND_WRITE: 'FFFA',  // Command write characteristic
+    COMMAND_NOTIFY: 'FFFB', // Command notify characteristic
+    AUDIO_STREAM_WRITE: 'FFF4', // Audio stream write
+    AUDIO_STREAM_NOTIFY: 'FFF5', // Audio stream notify
+  },
+  PROTOCOL: {
+    VERSION: [0x01, 0x00],  // 2 bytes version
+    HEADER: [0x61, 0x69, 0x6d, 0x74, 0x2d, 0x30],  // 6 bytes header identifier
+  },
+  COMMANDS: {
+    START_RECORDING: 0x61,  // Start real-time recording
+    STOP_RECORDING: 0x62,   // End real-time recording
+    PAUSE_RECORDING: 0x7F,  // Pause recording
+    RESUME_RECORDING: 0x7E, // Resume recording
+  },
 };
 
-export const useBluetooth = (): BluetoothHook => {
+// Helper function to construct command frames according to Voice Recorder Protocol v1.0.2
+const constructCommandFrame = (command: number, data?: number[]) => {
+  // Protocol specification exact values:
+  // Protocol Version: 2 bytes [0x01, 0x00]
+  // Header Identifier: 6 bytes [0x61, 0x69, 0x6d, 0x74, 0x2d, 0x30] = "aimt-0"
+  const frame = [
+    0x01, 0x00,                                    // Protocol Version (2 bytes)
+    0x61, 0x69, 0x6d, 0x74, 0x2d, 0x30,          // Header Identifier (6 bytes)
+    command,                                       // Command (1 byte)
+    0x00,                                         // Error code (1 byte)
+  ];
+
+  if (data) {
+    frame.push(...data);
+  }
+
+  console.log('🔧 Command frame construction:', {
+    protocolVersion: '[0x01, 0x00]',
+    headerIdentifier: '[0x61, 0x69, 0x6d, 0x74, 0x2d, 0x30] = "aimt-0"',
+    command: '0x' + command.toString(16).padStart(2, '0'),
+    errorCode: '0x00',
+    data: data ? '[' + data.map(b => '0x' + b.toString(16).padStart(2, '0')).join(', ') + ']' : 'none',
+    totalFrame: '[' + frame.map(b => '0x' + b.toString(16).padStart(2, '0')).join(', ') + ']'
+  });
+
+  return Buffer.from(frame);
+};
+
+export const useBluetooth = () => {
+  // Initialize BleManager as a singleton using useRef
+  const bleManagerRef = useRef<BleManagerClass | null>(null);
+  
+  // Initialize BleManager on first render
+  useEffect(() => {
+    bleManagerRef.current = new BleManagerClass();
+    
+    return () => {
+      if (bleManagerRef.current) {
+        bleManagerRef.current.destroy();
+      }
+    };
+  }, []);
+
   const [state, setState] = useState<BluetoothState>({
     isScanning: false,
-    error: null,
-    discoveredDevices: [],
-    connectedDevice: null,
     isConnecting: false,
-    bluetoothState: 'Unknown',
+    error: null,
+    connectedDevice: null,
+    discoveredDevices: [],
+    bluetoothState: BluetoothManagerState.Unknown,
     recordingState: {
       isRecording: false,
       isPaused: false,
-      duration: 0,
+      duration: 0
     },
+    batteryState: {
+      level: 0,
+      isCharging: false,
+      lastUpdated: 0
+    },
+    deviceServices: {}
   });
 
-  const bleManager = useMemo(() => new BleManager(), []);
+  // Add at the top level of the useBluetooth hook, before any other functions
+  let deviceResponseResolver: ((value: unknown) => void) | null = null;
+
+  const waitForDeviceResponse = () => new Promise((resolve) => {
+    deviceResponseResolver = resolve;
+    // Timeout after 5 seconds
+    setTimeout(() => {
+      if (deviceResponseResolver) {
+        console.log('⚠️ Device response timeout');
+        deviceResponseResolver(null);
+        deviceResponseResolver = null;
+      }
+    }, 5000);
+  });
+
+  // Helper function to identify voice recording devices
+  const filterSmartMicrophone = useCallback((device: Device) => {
+    // Check device name
+    const isNameMatch = device.name?.toLowerCase().includes('smart microphone');
+    
+    // Also check for known service UUIDs
+    const hasKnownService = device.serviceUUIDs?.some(uuid => 
+      uuid.toLowerCase() === MICROPHONE_BLE_CONSTANTS.SERVICES.COMMAND.toLowerCase() ||
+      uuid.toLowerCase() === MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_STREAM.toLowerCase()
+    );
+
+    return isNameMatch || hasKnownService;
+  }, []);
+
+  // Define stopScan before it's used
+  const stopScan = useCallback(() => {
+    if (bleManagerRef.current) {
+      bleManagerRef.current.stopDeviceScan();
+      setState(prev => ({ ...prev, isScanning: false }));
+      console.log('Smart Microphone scan completed');
+    }
+  }, []);
 
   const requestPermissions = useCallback(async (): Promise<boolean> => {
     if (Platform.OS === 'ios') {
@@ -98,22 +202,60 @@ export const useBluetooth = (): BluetoothHook => {
     return false;
   }, []);
 
-  const stopScan = useCallback(() => {
-    bleManager.stopDeviceScan();
-    setState(prev => ({ ...prev, isScanning: false }));
-    console.log('Smart Microphone scan completed');
-  }, [bleManager]);
-
-  const startScan = useCallback(async (): Promise<void> => {
-    const hasPermissions = await requestPermissions();
-    if (!hasPermissions) {
-      console.error('Bluetooth permissions not granted');
-      setState(prev => ({ ...prev, error: 'Bluetooth permissions not granted' }));
+  const handleDiscoverDevice = useCallback((error: BleError | null, device: Device | null) => {
+    if (error) {
+      console.error('Scan error:', error);
+      stopScan();
+      setState(prev => ({ ...prev, error: 'Scan failed' }));
       return;
     }
 
+    if (!device || !filterSmartMicrophone(device)) {
+      return;
+    }
+
+    setState(prev => {
+      // Check if device already exists
+      const exists = prev.discoveredDevices.some(d => d.id === device.id);
+      if (exists) {
+        return prev;
+      }
+
+      const newDevice: DeviceInfo = {
+        id: device.id,
+        name: device.name || 'Unknown Device',
+        rssi: device.rssi || -100,
+        isConnected: false,
+        isRecording: false,
+      };
+
+      return {
+        ...prev,
+        discoveredDevices: [...prev.discoveredDevices, newDevice]
+      };
+    });
+  }, [filterSmartMicrophone, stopScan]);
+
+  const handleCharacteristicUpdate = useCallback((error: BleError | null, characteristic: Characteristic | null) => {
+    if (error) {
+      console.error('Notification error:', error);
+      return;
+    }
+    // Handle incoming data
+    if (characteristic?.value) {
+      const data = Buffer.from(characteristic.value, 'base64');
+      console.log('Received data:', data);
+    }
+  }, []);
+
+  const startScan = useCallback(async (): Promise<void> => {
     try {
-      setState(prev => ({ ...prev, isScanning: true, error: null }));
+      const hasPermissions = await requestPermissions();
+      if (!hasPermissions || !bleManagerRef.current) {
+        return;
+      }
+
+      setState(prev => ({ ...prev, isScanning: true }));
       
       console.log('Starting BLE scan for Smart Microphone devices...');
       
@@ -121,55 +263,10 @@ export const useBluetooth = (): BluetoothHook => {
       setState(prev => ({ ...prev, discoveredDevices: [] }));
 
       // Start scanning for devices
-      await bleManager.startDeviceScan(
+      await bleManagerRef.current.startDeviceScan(
         null,
         { allowDuplicates: false },
-        (error, device) => {
-          if (error) {
-            console.error('Scan error:', error);
-            setState(prev => ({ ...prev, isScanning: false, error: error.message }));
-            return;
-          }
-
-          // Log all discovered devices for debugging
-          if (device) {
-            console.log('Found device:', {
-              id: device.id,
-              name: device.name,
-              localName: device.localName,
-              serviceUUIDs: device.serviceUUIDs,
-              manufacturerData: device.manufacturerData,
-              rssi: device.rssi,
-            });
-
-            // More lenient device name matching
-            const deviceName = (device.name || device.localName || '').toLowerCase();
-            const isTargetDevice = 
-              deviceName.includes('smart') || 
-              deviceName.includes('mic') ||
-              deviceName.includes('audio') ||
-              // Also check for known service UUIDs
-              device.serviceUUIDs?.some(uuid => 
-                uuid.toLowerCase() === MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_CONTROL.toLowerCase() ||
-                uuid.toLowerCase() === MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_DATA.toLowerCase()
-              );
-
-            if (isTargetDevice) {
-              console.log('Found potential Smart Microphone device:', device.name || device.localName);
-              const deviceInfo: DeviceInfo = {
-                id: device.id,
-                name: device.name || device.localName || 'Smart Microphone',
-                rssi: device.rssi || -100,
-                isConnected: false,
-                isRecording: false,
-              };
-              setState(prev => ({
-                ...prev,
-                discoveredDevices: [...prev.discoveredDevices.filter(d => d.id !== device.id), deviceInfo],
-              }));
-            }
-          }
-        },
+        handleDiscoverDevice
       );
 
       // Stop scan after timeout
@@ -180,18 +277,25 @@ export const useBluetooth = (): BluetoothHook => {
       console.error('Start scan error:', error);
       setState(prev => ({ ...prev, isScanning: false, error: (error as Error).message }));
     }
-  }, [bleManager, requestPermissions, stopScan]);
+  }, [requestPermissions, stopScan, handleDiscoverDevice]);
 
+
+
+  // Update the service validation in connectToDevice
   const connectToDevice = useCallback(async (deviceId: string): Promise<void> => {
+    if (!bleManagerRef.current) {
+      throw new Error('BLE Manager not initialized');
+    }
+
     try {
       setState(prev => ({ ...prev, isConnecting: true, error: null }));
       
       console.log(`Attempting to connect to Smart Microphone: ${deviceId}`);
       
       // Connect to device
-      const device = await bleManager.connectToDevice(deviceId, {
+      const device = await bleManagerRef.current.connectToDevice(deviceId, {
         timeout: 10000,
-        requestMTU: 517, // Request maximum MTU for better data transfer
+        requestMTU: 517,
         autoConnect: true,
       });
       
@@ -201,18 +305,42 @@ export const useBluetooth = (): BluetoothHook => {
       // Get all services
       const services = await device.services();
       console.log('Discovered services:', services.map(s => s.uuid));
-
-      // Validate required services
-      const hasAudioControl = services.some(s => 
-        s.uuid.toLowerCase() === MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_CONTROL.toLowerCase()
-      );
-      const hasAudioData = services.some(s => 
-        s.uuid.toLowerCase() === MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_DATA.toLowerCase()
-      );
-
-      if (!hasAudioControl || !hasAudioData) {
-        throw new Error('Device validation failed: Missing required audio services');
+      
+      // Log all characteristics for each service
+      for (const service of services) {
+        const characteristics = await device.characteristicsForService(service.uuid);
+        console.log(`Characteristics for service ${service.uuid}:`, 
+          characteristics.map(c => ({
+            uuid: c.uuid,
+            isWritableWithResponse: c.isWritableWithResponse,
+            isWritableWithoutResponse: c.isWritableWithoutResponse,
+            isNotifiable: c.isNotifiable,
+            isReadable: c.isReadable
+          }))
+        );
       }
+
+      // Find command and audio services using actual device UUIDs
+      const commandService = services.find((s: any) => {
+        const uuid = s.uuid.toLowerCase();
+        return uuid === MICROPHONE_BLE_CONSTANTS.SERVICES.COMMAND.toLowerCase() ||
+               uuid === '0011200a-2233-4455-6677-889912345678';
+      });
+      
+      const audioService = services.find((s: any) => {
+        const uuid = s.uuid.toLowerCase();
+        return uuid === MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_STREAM.toLowerCase() ||
+               uuid === 'e49a25f8-f69a-11e8-8eb2-f2801f1b9fd1';
+      });
+      
+      if (!commandService || !audioService) {
+        throw new Error('Device validation failed: Missing required audio control or streaming services');
+      }
+
+      console.log('Found required services:', {
+        command: commandService.uuid,
+        audio: audioService.uuid
+      });
 
       // Set connection priority to high for better audio streaming
       if (Platform.OS === 'android') {
@@ -222,6 +350,251 @@ export const useBluetooth = (): BluetoothHook => {
         } catch (error) {
           console.warn('Failed to set connection priority:', error);
         }
+      }
+
+      // Set up device notifications for command responses inline
+      try {
+        const characteristics = await device.characteristicsForService(commandService.uuid);
+        console.log('Command service characteristics:', characteristics.map((c: any) => c.uuid));
+        
+        // CRITICAL FIX: Use the correct characteristics based on device response pattern
+        // Find write characteristic - we need one that supports writeWithoutResponse
+        let writeChar = characteristics.find((c: any) => {
+          const uuid = c.uuid.toLowerCase();
+          return uuid === '0011202a-2233-4455-6677-889912345678' && c.isWritableWithoutResponse;
+        });
+
+        // If not found, try alternative write characteristic
+        if (!writeChar) {
+          writeChar = characteristics.find((c: any) => {
+            const uuid = c.uuid.toLowerCase();
+            return uuid === '0011204a-2233-4455-6677-889912345678' && c.isWritableWithoutResponse;
+          });
+        }
+
+        // Find notification characteristic - we need one that supports notifications
+        let notifyChar = characteristics.find((c: any) => {
+          const uuid = c.uuid.toLowerCase();
+          return uuid === '0011203a-2233-4455-6677-889912345678' && c.isNotifiable;
+        });
+
+        // If not found, try alternative notification characteristic
+        if (!notifyChar) {
+          notifyChar = characteristics.find((c: any) => {
+            const uuid = c.uuid.toLowerCase();
+            return uuid === '0011201a-2233-4455-6677-889912345678' && c.isNotifiable;
+          });
+        }
+
+        console.log('Selected characteristics:', {
+          write: writeChar?.uuid,
+          writeProperties: {
+            isWritableWithResponse: writeChar?.isWritableWithResponse,
+            isWritableWithoutResponse: writeChar?.isWritableWithoutResponse,
+            isNotifiable: writeChar?.isNotifiable
+          },
+          notify: notifyChar?.uuid,
+          notifyProperties: {
+            isNotifiable: notifyChar?.isNotifiable,
+            isWritable: notifyChar?.isWritableWithoutResponse || notifyChar?.isWritableWithResponse
+          }
+        });
+
+        if (!writeChar || !notifyChar) {
+          throw new Error('Required characteristics not found');
+        }
+
+        // Store service UUIDs for later use including audio service
+        setState(prev => ({
+          ...prev,
+          deviceServices: {
+            commandServiceUuid: commandService.uuid,
+            audioServiceUuid: audioService.uuid,
+            commandWriteCharUuid: writeChar.uuid,
+            commandNotifyCharUuid: notifyChar.uuid,
+          }
+        }));
+        
+                // CRITICAL FIX: Set up notifications on the WRITE characteristic that also has notify capability
+        const writeNotifyChar = writeChar.isNotifiable ? writeChar : notifyChar;
+        console.log('🔔 Setting up PRIMARY notification on WRITE+NOTIFY characteristic:', writeNotifyChar.uuid);
+
+        // Set up a Promise to wait for device response
+        // let deviceResponseResolver: ((value: unknown) => void) | null = null; // Moved to top level
+        // const waitForDeviceResponse = () => new Promise((resolve) => { // Moved to top level
+        //   deviceResponseResolver = resolve;
+        //   // Timeout after 5 seconds
+        //   setTimeout(() => {
+        //     if (deviceResponseResolver) {
+        //       console.log('⚠️ Device response timeout');
+        //       deviceResponseResolver(null);
+        //       deviceResponseResolver = null;
+        //     }
+        //   }, 5000);
+        // });
+
+        // Set up notifications on the NOTIFICATION characteristic (not the write one)
+        console.log('🔔 Setting up notifications on characteristic:', notifyChar.uuid);
+
+        // Set up a Promise to wait for device response
+        deviceResponseResolver = null;
+
+        await device.monitorCharacteristicForService(
+          commandService.uuid,
+          notifyChar.uuid,  // Use the notification characteristic
+          (error: BleError | null, characteristic: Characteristic | null) => {
+            if (error) {
+              console.error('❌ Notification error:', error);
+              if (deviceResponseResolver) {
+                deviceResponseResolver(null);
+                deviceResponseResolver = null;
+              }
+              return;
+            }
+
+            if (characteristic && characteristic.value) {
+              console.log('📨 Notification received:', {
+                characteristic: characteristic.uuid,
+                value: characteristic.value
+              });
+
+              try {
+                const data = Buffer.from(characteristic.value, 'base64');
+                console.log('📨 Parsed data:', {
+                  hex: data.toString('hex'),
+                  bytes: Array.from(data),
+                  ascii: data.toString('ascii')
+                });
+
+                // Handle different types of device responses
+                if (data.length > 0) {
+                  const command = data[8]; // Command byte is at index 8
+                  console.log('📨 Command byte:', '0x' + command.toString(16));
+
+                  if (data.length >= 10) {
+                    const errorCode = data[9];
+                    if (errorCode !== 0x00) {
+                      console.error('❌ Error code:', '0x' + errorCode.toString(16));
+                      if (deviceResponseResolver) {
+                        deviceResponseResolver(false);
+                        deviceResponseResolver = null;
+                      }
+                      return;
+                    }
+                  }
+
+                  switch(command) {
+                    case 0x6E: // Battery level response
+                      if (data.length >= 12) {
+                        const battery = data[10];
+                        const charging = data[11];
+                        console.log(`🔋 Battery: ${battery}%, Charging: ${charging === 1}`);
+                        setState(prev => ({
+                          ...prev,
+                          batteryState: {
+                            level: battery,
+                            isCharging: charging === 1,
+                            lastUpdated: Date.now()
+                          }
+                        }));
+                        if (deviceResponseResolver) {
+                          deviceResponseResolver(true);
+                          deviceResponseResolver = null;
+                        }
+                      }
+                      break;
+
+                    case 0xaa: // Battery warning
+                      if (data.length >= 3) {
+                        const battery = data[data.length - 2];
+                        const charging = data[data.length - 1];
+                        console.log(`🔋 Low Battery Warning: ${battery}%, Charging: ${charging === 1}`);
+                        setState(prev => ({
+                          ...prev,
+                          batteryState: {
+                            level: battery,
+                            isCharging: charging === 1,
+                            lastUpdated: Date.now()
+                          }
+                        }));
+                        if (deviceResponseResolver) {
+                          deviceResponseResolver(true);
+                          deviceResponseResolver = null;
+                        }
+                      }
+                      break;
+
+                    case MICROPHONE_BLE_CONSTANTS.COMMANDS.START_RECORDING:
+                      console.log('🎙️ Recording started');
+                      setState(prev => ({
+                        ...prev,
+                        recordingState: { 
+                          ...prev.recordingState, 
+                          isRecording: true, 
+                          isPaused: false 
+                        }
+                      }));
+                      if (deviceResponseResolver) {
+                        deviceResponseResolver(true);
+                        deviceResponseResolver = null;
+                      }
+                      break;
+
+                    default:
+                      console.log('📨 Other command response:', '0x' + command.toString(16));
+                      if (deviceResponseResolver) {
+                        deviceResponseResolver(true);
+                        deviceResponseResolver = null;
+                      }
+                  }
+                }
+              } catch (error) {
+                console.error('Failed to parse notification:', error);
+                if (deviceResponseResolver) {
+                  deviceResponseResolver(false);
+                  deviceResponseResolver = null;
+                }
+              }
+            }
+          }
+        );
+
+        // ALSO monitor ALL other notification characteristics to debug
+        const allNotifyChars = characteristics.filter(c => c.isNotifiable);
+        console.log('🔔 All notifiable characteristics:', allNotifyChars.map(c => c.uuid));
+        
+        for (const char of allNotifyChars) {
+          if (char.uuid !== notifyChar.uuid) {
+            console.log('🔔 Setting up DEBUG notification on:', char.uuid);
+            try {
+              await device.monitorCharacteristicForService(
+                commandService.uuid,
+                char.uuid,
+                (error: BleError | null, characteristic: Characteristic | null) => {
+                  if (error) {
+                    console.error(`❌ DEBUG notification error on ${char.uuid}:`, error);
+                    return;
+                  }
+                  if (characteristic && characteristic.value) {
+                    const data = Buffer.from(characteristic.value, 'base64');
+                    console.log(`📨 DEBUG notification from ${char.uuid}:`, {
+                      bytes: Array.from(data),
+                      hex: data.toString('hex')
+                    });
+                  }
+                }
+              );
+            } catch (debugError) {
+              console.warn(`⚠️ Could not set up debug monitoring on ${char.uuid}:`, debugError);
+            }
+          }
+        }
+        
+                console.log('✅ Smart Microphone notifications set up successfully');
+        
+      } catch (notificationError) {
+        console.error('Failed to set up notifications:', notificationError);
+        throw notificationError;
       }
 
       const deviceInfo: DeviceInfo = {
@@ -236,23 +609,29 @@ export const useBluetooth = (): BluetoothHook => {
         ...prev,
         connectedDevice: deviceInfo,
         isConnecting: false,
+        error: null
       }));
 
       console.log('Successfully connected to Smart Microphone');
+        console.log('✅ Device ready - using correct characteristics that responded!');
     } catch (error) {
       console.error('Connection error:', error);
-      setState(prev => ({ ...prev, isConnecting: false, error: (error as Error).message }));
+      setState(prev => ({ 
+        ...prev, 
+        isConnecting: false, 
+        error: error instanceof Error ? error.message : 'Unknown error occurred' 
+      }));
       throw error;
     }
-  }, [bleManager]);
+  }, []);
 
   // Helper function to identify voice recording devices
   const isVoiceRecorderDevice = useCallback((device: Device): boolean => {
     if (!device.serviceUUIDs) return false;
 
     const expectedServices = [
-      MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_CONTROL.toLowerCase(),
-      MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_DATA.toLowerCase(),
+      MICROPHONE_BLE_CONSTANTS.SERVICES.COMMAND.toLowerCase(),
+      MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_STREAM.toLowerCase(),
     ];
 
     const deviceServices = device.serviceUUIDs.map(uuid => 
@@ -283,132 +662,48 @@ export const useBluetooth = (): BluetoothHook => {
     isCompatible: boolean;
     commandService?: any;
     audioService?: any;
-    fileService?: any;
     reason?: string;
   } => {
     const expectedServices = {
-      command: MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_CONTROL.toLowerCase(),
-      audio: MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_DATA.toLowerCase(),
+      control: MICROPHONE_BLE_CONSTANTS.SERVICES.COMMAND.toLowerCase(),
+      audio: MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_STREAM.toLowerCase(),
     };
 
     const foundServices = {
-      command: null as any,
+      control: null as any,
       audio: null as any,
     };
 
     // Check each service
     for (const service of services) {
-      const serviceUuid = service.uuid.toLowerCase().replace(/-/g, '');
-      
-      if (serviceUuid.includes(expectedServices.command)) {
-        foundServices.command = service;
-      } else if (serviceUuid.includes(expectedServices.audio)) {
+      const serviceUuid = service.uuid.toLowerCase();
+      if (serviceUuid === expectedServices.control) {
+        foundServices.control = service;
+      } else if (serviceUuid === expectedServices.audio) {
         foundServices.audio = service;
       }
     }
 
-    // Require at least command and audio services for basic functionality
-    const isCompatible = foundServices.command !== null && foundServices.audio !== null;
-    
+    // Both services are required
+    const isCompatible = foundServices.control !== null && foundServices.audio !== null;
+
     return {
       isCompatible,
-      commandService: foundServices.command,
+      commandService: foundServices.control,
       audioService: foundServices.audio,
-      fileService: null, // No file service in this model
-      reason: isCompatible ? 'Compatible Smart Microphone' : 'Missing required services (0011200a and e49a25f8)',
+      reason: isCompatible ? undefined : 'Missing required audio services',
     };
   }, []);
 
-  // Handle voice recorder responses
-  const handleVoiceRecorderResponse = useCallback((data: Buffer): void => {
-    if (data.length === 0) return;
 
-    // Parse according to your protocol document
-    console.log('Processing Smart Microphone response:', {
-      length: data.length,
-      data: Array.from(data),
-      hex: data.toString('hex'),
-    });
-
-    // Update recording state based on response
-    const command = data[0];
-    if (command === RECORDING_COMMANDS.START_RECORDING) {
-      setState(prev => ({
-        ...prev,
-        recordingState: { ...prev.recordingState, isRecording: true, isPaused: false }
-      }));
-    } else if (command === RECORDING_COMMANDS.END_RECORDING) {
-      setState(prev => ({
-        ...prev,
-        recordingState: { ...prev.recordingState, isRecording: false, isPaused: false }
-      }));
-    } else if (command === RECORDING_COMMANDS.PAUSE_RECORDING) {
-      setState(prev => ({
-        ...prev,
-        recordingState: { ...prev.recordingState, isPaused: true }
-      }));
-    } else if (command === RECORDING_COMMANDS.RESUME_RECORDING) {
-      setState(prev => ({
-        ...prev,
-        recordingState: { ...prev.recordingState, isPaused: false }
-      }));
-    }
-  }, []);
-
-  // Enhanced notification setup
-  const setupDeviceNotifications = useCallback(async (device: Device, commandService: any): Promise<void> => {
-    try {
-      const characteristics = await commandService.characteristics();
-      console.log('Command service characteristics:', characteristics.map((c: any) => c.uuid));
-      
-      // Find notification characteristic
-      const notifyChar = characteristics.find((c: any) => 
-        c.uuid.toLowerCase().includes(MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_DATA.toLowerCase()) ||
-        c.isNotifiable
-      );
-      
-      if (notifyChar) {
-        console.log('Setting up notifications on:', notifyChar.uuid);
-        
-        await device.monitorCharacteristicForService(
-          commandService.uuid,
-          notifyChar.uuid,
-          (error: BleError | null, characteristic: Characteristic | null) => {
-            if (error) {
-              console.error('Notification error:', error);
-              return;
-            }
-
-            if (characteristic && characteristic.value) {
-              try {
-                const data = Buffer.from(characteristic.value, 'base64');
-                console.log('Received Smart Microphone data:', Array.from(data));
-                
-                // Parse response according to protocol
-                handleVoiceRecorderResponse(data);
-                
-              } catch (parseError) {
-                console.error('Failed to parse Smart Microphone response:', parseError);
-              }
-            }
-          }
-        );
-        
-        console.log('✅ Smart Microphone notifications set up successfully');
-      } else {
-        console.log('⚠️ No notification characteristic found');
-      }
-      
-    } catch (error) {
-      console.error('Failed to set up notifications:', error);
-    }
-  }, [handleVoiceRecorderResponse]);
 
   // Disconnect from device
   const disconnectDevice = useCallback(async (): Promise<void> => {
     if (state.connectedDevice) {
       try {
-        await bleManager.cancelDeviceConnection(state.connectedDevice.id);
+        if (bleManagerRef.current) {
+          await bleManagerRef.current.cancelDeviceConnection(state.connectedDevice.id);
+        }
         setState(prev => ({
           ...prev,
           connectedDevice: null,
@@ -418,107 +713,375 @@ export const useBluetooth = (): BluetoothHook => {
         console.error('Disconnect failed:', error);
       }
     }
-  }, [bleManager, state.connectedDevice]);
+  }, [state.connectedDevice]);
 
-  // Send command to device
-  const sendCommand = useCallback(async (command: number, data: number[] = []): Promise<void> => {
-    if (!state.connectedDevice) {
-      throw new Error('No device connected');
+
+
+  // Recording timer
+  const recordingTimer = useRef<NodeJS.Timeout | null>(null);
+
+  const updateRecordingDuration = useCallback(() => {
+    setState(prev => ({
+      ...prev,
+      recordingState: {
+        ...prev.recordingState,
+        duration: prev.recordingState.duration + 1
+      }
+    }));
+  }, []);
+
+  const startRecordingTimer = useCallback(() => {
+    if (recordingTimer.current) {
+      clearInterval(recordingTimer.current);
     }
+    recordingTimer.current = setInterval(updateRecordingDuration, 1000);
+  }, [updateRecordingDuration]);
 
+  const stopRecordingTimer = useCallback(() => {
+    if (recordingTimer.current) {
+      clearInterval(recordingTimer.current);
+      recordingTimer.current = null;
+    }
+  }, []);
+
+  // Update the sendCommandAndWaitForResponse function
+  const sendCommandAndWaitForResponse = useCallback(async (device: Device, command: number, data?: number[]) => {
+    const commandFrame = constructCommandFrame(command, data);
+    console.log(`Sending command: 0x${command.toString(16)}`, {
+      data: data ? data.map(b => '0x' + b.toString(16)).join(' ') : 'none',
+      frame: Array.from(commandFrame).map(b => '0x' + b.toString(16)).join(' ')
+    });
+    
     try {
-      const device = await bleManager.connectToDevice(state.connectedDevice.id);
-      const commandFrame = ProtocolHelpers.createCommandFrame(command, data);
-      const base64Command = Buffer.from(commandFrame).toString('base64');
-      
-      await device.writeCharacteristicWithResponseForService(
-        MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_CONTROL,
-        MICROPHONE_BLE_CONSTANTS.SERVICES.AUDIO_DATA,
-        base64Command
+      // Always use writeWithoutResponse as that's what the characteristic supports
+      await device.writeCharacteristicWithoutResponseForService(
+        state.deviceServices.commandServiceUuid!,
+        state.deviceServices.commandWriteCharUuid!,
+        commandFrame.toString('base64')
       );
       
-      console.log('Command sent successfully');
+      // Wait for response with timeout
+      const response = await waitForDeviceResponse();
+      if (response === null) {
+        console.log(`Command 0x${command.toString(16)} timed out`);
+        return false;
+      }
+      
+      console.log(`Command 0x${command.toString(16)} completed:`, response);
+      return response;
     } catch (error) {
-      console.error('Failed to send command:', error);
-      throw error;
+      console.error(`Failed to send command 0x${command.toString(16)}:`, error);
+      return false;
     }
-  }, [bleManager, state.connectedDevice]);
+  }, [state.deviceServices, waitForDeviceResponse]);
 
-  // Recording control methods
-  const startRecording = useCallback(async (): Promise<void> => {
-    try {
-      await sendCommand(RECORDING_COMMANDS.START_RECORDING);
-      setState(prev => ({
-        ...prev,
-        recordingState: { ...prev.recordingState, isRecording: true, isPaused: false }
-      }));
-    } catch (error) {
-      console.error('Failed to start recording:', error);
-      throw error;
+  // Update startRecording function
+  const startRecording = useCallback(async () => {
+    if (!state.connectedDevice || !bleManagerRef.current || !state.deviceServices.commandServiceUuid || !state.deviceServices.commandWriteCharUuid) {
+      setState(prev => ({ ...prev, error: 'Device not ready' }));
+      return;
     }
-  }, [sendCommand]);
 
-  const stopRecording = useCallback(async (): Promise<void> => {
     try {
-      await sendCommand(RECORDING_COMMANDS.END_RECORDING);
-      setState(prev => ({
-        ...prev,
-        recordingState: { ...prev.recordingState, isRecording: false, isPaused: false }
-      }));
-    } catch (error) {
-      console.error('Failed to stop recording:', error);
-      throw error;
-    }
-  }, [sendCommand]);
+      const device = await bleManagerRef.current.devices([state.connectedDevice.id]);
+      if (device.length === 0) {
+        throw new Error('Device not found');
+      }
 
-  const pauseRecording = useCallback(async (): Promise<void> => {
-    try {
-      await sendCommand(RECORDING_COMMANDS.PAUSE_RECORDING);
-      setState(prev => ({
-        ...prev,
-        recordingState: { ...prev.recordingState, isPaused: true }
-      }));
-    } catch (error) {
-      console.error('Failed to pause recording:', error);
-      throw error;
-    }
-  }, [sendCommand]);
+      console.log('Starting device initialization sequence...');
 
-  const resumeRecording = useCallback(async (): Promise<void> => {
-    try {
-      await sendCommand(RECORDING_COMMANDS.RESUME_RECORDING);
-      setState(prev => ({
-        ...prev,
-        recordingState: { ...prev.recordingState, isPaused: false }
-      }));
+      // 1. Check battery level
+      const batteryResponse = await sendCommandAndWaitForResponse(device[0], 0x6E);
+      if (!batteryResponse) {
+        console.error('Failed to get battery status');
+        return;
+      }
+
+      // Check if battery is too low
+      if (state.batteryState.level < 10) {
+        setState(prev => ({ ...prev, error: 'Battery too low to start recording' }));
+        return;
+      }
+
+      // 2. Get device status
+      const statusResponse = await sendCommandAndWaitForResponse(device[0], 0x71);
+      if (!statusResponse) {
+        console.error('Failed to get device status');
+        return;
+      }
+
+      // 3. Sync time with device
+      const timestamp = Math.floor(Date.now() / 1000);
+      const timeBytes = [
+        (timestamp >> 24) & 0xFF,
+        (timestamp >> 16) & 0xFF,
+        (timestamp >> 8) & 0xFF,
+        timestamp & 0xFF,
+        12 // UTC+12 timezone
+      ];
+      const timeResponse = await sendCommandAndWaitForResponse(device[0], 0x69, timeBytes);
+      if (!timeResponse) {
+        console.error('Failed to sync time');
+        return;
+      }
+
+      // 4. Start recording
+      const sessionId = Math.floor(Date.now() / 1000);
+      const sessionIdBytes = [
+        (sessionId >> 24) & 0xFF,
+        (sessionId >> 16) & 0xFF,
+        (sessionId >> 8) & 0xFF,
+        sessionId & 0xFF,
+      ];
+      
+      // Try both save flags
+      const saveFlagOptions = [0x00, 0x01];
+      let recordingStarted = false;
+
+      for (const saveFlag of saveFlagOptions) {
+        console.log('Trying to start recording with save flag:', saveFlag);
+        const recordResponse = await sendCommandAndWaitForResponse(
+          device[0],
+          MICROPHONE_BLE_CONSTANTS.COMMANDS.START_RECORDING,
+          [...sessionIdBytes, saveFlag]
+        );
+
+        if (recordResponse) {
+          recordingStarted = true;
+          console.log('Recording started successfully with save flag:', saveFlag);
+          break;
+        }
+      }
+
+      if (!recordingStarted) {
+        setState(prev => ({ ...prev, error: 'Failed to start recording' }));
+      }
     } catch (error) {
-      console.error('Failed to resume recording:', error);
-      throw error;
+      console.error('Start recording error:', error);
+      setState(prev => ({ ...prev, error: 'Failed to start recording' }));
     }
-  }, [sendCommand]);
+  }, [state.connectedDevice, state.deviceServices, state.batteryState.level, sendCommandAndWaitForResponse]);
+
+  const stopRecording = useCallback(async () => {
+    if (!state.connectedDevice || !state.recordingState.isRecording) {
+      return;
+    }
+
+    if (!bleManagerRef.current) {
+      throw new Error('BLE Manager not initialized');
+    }
+
+    if (!state.deviceServices.commandServiceUuid || !state.deviceServices.commandWriteCharUuid) {
+      setState(prev => ({ ...prev, error: 'Device services not ready' }));
+      return;
+    }
+
+    try {
+      const device = await bleManagerRef.current.devices([state.connectedDevice.id]);
+      if (device.length === 0) {
+        throw new Error('Device not found');
+      }
+
+      console.log('Using service:', state.deviceServices.commandServiceUuid, 'and characteristic:', state.deviceServices.commandWriteCharUuid);
+
+      const commandFrame = constructCommandFrame(MICROPHONE_BLE_CONSTANTS.COMMANDS.STOP_RECORDING);
+      console.log('Constructed command frame:', {
+        protocolVersion: '0x' + MICROPHONE_BLE_CONSTANTS.PROTOCOL.VERSION.map(b => b.toString(16).padStart(2, '0')).join(' 0x'),
+        headerIdentifier: '0x' + MICROPHONE_BLE_CONSTANTS.PROTOCOL.HEADER.map(b => b.toString(16).padStart(2, '0')).join(' 0x'),
+        commandIndicator: '0x' + MICROPHONE_BLE_CONSTANTS.COMMANDS.STOP_RECORDING.toString(16),
+        errorCode: '0x00',
+        data: 'none',
+        frame: '0x' + Array.from(commandFrame).map(b => b.toString(16).padStart(2, '0')).join(' 0x')
+      });
+
+      // Try both write methods
+      console.log('🔧 Trying writeWithoutResponse first...');
+      try {
+        await device[0].writeCharacteristicWithoutResponseForService(
+          state.deviceServices.commandServiceUuid,
+          state.deviceServices.commandWriteCharUuid,
+          commandFrame.toString('base64')
+        );
+        console.log('✅ Stop recording command sent (writeWithoutResponse)');
+      } catch (error) {
+        console.log('⚠️ writeWithoutResponse failed, trying writeWithResponse...');
+      await device[0].writeCharacteristicWithResponseForService(
+          state.deviceServices.commandServiceUuid,
+          state.deviceServices.commandWriteCharUuid,
+          commandFrame.toString('base64')
+      );
+        console.log('✅ Stop recording command sent (writeWithResponse)');
+      }
+      // Note: Recording state will be updated when device confirms via notification
+    } catch (error) {
+      console.error('Stop recording error:', error);
+      setState(prev => ({ ...prev, error: 'Failed to stop recording' }));
+    }
+  }, [state.connectedDevice, state.deviceServices, state.recordingState.isRecording]);
+
+  const pauseRecording = useCallback(async () => {
+    if (!state.connectedDevice || !state.recordingState.isRecording || state.recordingState.isPaused) {
+      return;
+    }
+
+    if (!bleManagerRef.current) {
+      throw new Error('BLE Manager not initialized');
+    }
+
+    if (!state.deviceServices.commandServiceUuid || !state.deviceServices.commandWriteCharUuid) {
+      setState(prev => ({ ...prev, error: 'Device services not ready' }));
+      return;
+    }
+
+    try {
+      const device = await bleManagerRef.current.devices([state.connectedDevice.id]);
+      if (device.length === 0) {
+        throw new Error('Device not found');
+      }
+
+      // Try both write methods
+      const pauseFrame = constructCommandFrame(MICROPHONE_BLE_CONSTANTS.COMMANDS.PAUSE_RECORDING);
+      try {
+        await device[0].writeCharacteristicWithoutResponseForService(
+          state.deviceServices.commandServiceUuid,
+          state.deviceServices.commandWriteCharUuid,
+          pauseFrame.toString('base64')
+        );
+        console.log('✅ Pause recording command sent (writeWithoutResponse)');
+      } catch (error) {
+        console.log('⚠️ writeWithoutResponse failed, trying writeWithResponse...');
+      await device[0].writeCharacteristicWithResponseForService(
+          state.deviceServices.commandServiceUuid,
+          state.deviceServices.commandWriteCharUuid,
+          pauseFrame.toString('base64')
+      );
+        console.log('✅ Pause recording command sent (writeWithResponse)');
+      }
+      // Note: Recording state will be updated when device confirms via notification
+    } catch (error) {
+      console.error('Pause recording error:', error);
+      setState(prev => ({ ...prev, error: 'Failed to pause recording' }));
+    }
+  }, [state.connectedDevice, state.deviceServices, state.recordingState]);
+
+  const resumeRecording = useCallback(async () => {
+    if (!state.connectedDevice || !state.recordingState.isRecording || !state.recordingState.isPaused) {
+      return;
+    }
+
+    if (!bleManagerRef.current) {
+      throw new Error('BLE Manager not initialized');
+    }
+
+    if (!state.deviceServices.commandServiceUuid || !state.deviceServices.commandWriteCharUuid) {
+      setState(prev => ({ ...prev, error: 'Device services not ready' }));
+      return;
+    }
+
+    try {
+      const device = await bleManagerRef.current.devices([state.connectedDevice.id]);
+      if (device.length === 0) {
+        throw new Error('Device not found');
+      }
+
+      // Try both write methods
+      const resumeFrame = constructCommandFrame(MICROPHONE_BLE_CONSTANTS.COMMANDS.RESUME_RECORDING);
+      try {
+        await device[0].writeCharacteristicWithoutResponseForService(
+          state.deviceServices.commandServiceUuid,
+          state.deviceServices.commandWriteCharUuid,
+          resumeFrame.toString('base64')
+        );
+        console.log('✅ Resume recording command sent (writeWithoutResponse)');
+      } catch (error) {
+        console.log('⚠️ writeWithoutResponse failed, trying writeWithResponse...');
+      await device[0].writeCharacteristicWithResponseForService(
+          state.deviceServices.commandServiceUuid,
+          state.deviceServices.commandWriteCharUuid,
+          resumeFrame.toString('base64')
+      );
+        console.log('✅ Resume recording command sent (writeWithResponse)');
+      }
+      // Note: Recording state will be updated when device confirms via notification
+    } catch (error) {
+      console.error('Resume recording error:', error);
+      setState(prev => ({ ...prev, error: 'Failed to resume recording' }));
+    }
+  }, [state.connectedDevice, state.deviceServices, state.recordingState]);
+
+  // Add after other useRef declarations
+  const batteryCheckTimer = useRef<NodeJS.Timeout | null>(null);
+
+  // Add this new function
+  const checkBatteryLevel = useCallback(async () => {
+    if (!state.connectedDevice || !bleManagerRef.current || !state.deviceServices.commandServiceUuid || !state.deviceServices.commandWriteCharUuid) {
+      return;
+    }
+
+    try {
+      const device = await bleManagerRef.current.devices([state.connectedDevice.id]);
+      if (device.length === 0) return;
+
+      const batteryFrame = constructCommandFrame(0x6E);
+      await device[0].writeCharacteristicWithoutResponseForService(
+        state.deviceServices.commandServiceUuid,
+        state.deviceServices.commandWriteCharUuid,
+        batteryFrame.toString('base64')
+      );
+    } catch (error) {
+      console.error('Battery check failed:', error);
+    }
+  }, [state.connectedDevice, state.deviceServices]);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      bleManager.stopDeviceScan();
+      if (bleManagerRef.current) {
+        bleManagerRef.current.stopDeviceScan();
+      }
       if (state.connectedDevice) {
-        bleManager.cancelDeviceConnection(state.connectedDevice.id);
+        if (bleManagerRef.current) {
+          bleManagerRef.current.cancelDeviceConnection(state.connectedDevice.id);
+        }
+      }
+      if (recordingTimer.current) {
+        clearInterval(recordingTimer.current);
+      }
+      if (batteryCheckTimer.current) {
+        clearInterval(batteryCheckTimer.current);
       }
     };
-  }, [bleManager, state.connectedDevice]);
+  }, [state.connectedDevice]);
+
+  const disconnectFromDevice = useCallback(async () => {
+    if (!state.connectedDevice) return;
+
+    if (!bleManagerRef.current) {
+      throw new Error('BLE Manager not initialized');
+    }
+
+    try {
+      const device = await bleManagerRef.current.devices([state.connectedDevice.id]);
+      if (device.length > 0) {
+        await device[0].cancelConnection();
+      }
+      setState(prev => ({ 
+        ...prev, 
+        connectedDevice: null,
+        deviceServices: {} // Clear stored services
+      }));
+    } catch (error) {
+      console.error('Disconnect error:', error);
+      setState(prev => ({ ...prev, error: 'Failed to disconnect from device' }));
+    }
+  }, [state.connectedDevice]);
 
   return {
-    isScanning: state.isScanning,
-    devices: state.discoveredDevices,
-    connectedDevice: state.connectedDevice,
-    isConnecting: state.isConnecting,
-    connectionError: state.error,
+    state,
     startScan,
     stopScan,
     connectToDevice,
-    disconnectDevice,
-    sendCommand,
-    recordingState: state.recordingState,
+    disconnectFromDevice,
     startRecording,
     stopRecording,
     pauseRecording,
